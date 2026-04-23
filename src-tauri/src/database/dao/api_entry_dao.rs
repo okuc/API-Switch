@@ -19,6 +19,9 @@ pub struct ApiEntry {
     pub channel_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_api_type: Option<String>,
+    // Model's owned_by from channel_api_type mapping
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub owned_by: Option<String>,
 }
 
 fn default_circuit_state() -> String {
@@ -49,8 +52,9 @@ impl Database {
                     circuit_state: "closed".to_string(),
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
-                    channel_name: row.get(8)?,
-                    channel_api_type: row.get(9)?,
+                    channel_name: row.get(8).ok(),
+                    channel_api_type: row.get(9).ok(),
+                    owned_by: None,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -88,6 +92,7 @@ impl Database {
             updated_at: now,
             channel_name: None,
             channel_api_type: None,
+            owned_by: None,
         })
     }
 
@@ -176,6 +181,7 @@ impl Database {
                 updated_at: row.get(7)?,
                 channel_name: None,
                 channel_api_type: None,
+                owned_by: None,
             })
         });
 
@@ -237,14 +243,14 @@ impl Database {
         Ok(())
     }
 
-    /// Get all enabled entries for proxy routing (with channel info)
+    /// Get all enabled entries for proxy routing (with channel info).
     pub fn get_enabled_entries_for_routing(&self) -> Result<Vec<ApiEntry>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
             "SELECT e.id, e.channel_id, e.model, e.display_name, e.sort_index, e.enabled,
-                    e.created_at, e.updated_at, c.name, c.api_type, c.base_url, c.api_key
+                    e.created_at, e.updated_at, c.name, c.api_type
              FROM api_entries e
-             JOIN channels c ON e.channel_id = c.id
+             LEFT JOIN channels c ON e.channel_id = c.id
              WHERE e.enabled = 1 AND c.enabled = 1
              ORDER BY e.sort_index",
         )?;
@@ -252,6 +258,18 @@ impl Database {
         let entries = stmt
             .query_map([], |row| {
                 let enabled: i32 = row.get(5)?;
+                // Map channel_api_type to owned_by (model provider)
+                let owned_by =
+                    row.get::<_, String>(9)
+                        .ok()
+                        .and_then(|api_type| match api_type.as_str() {
+                            "openai" | "anthropic" => Some("openai".to_string()),
+                            "claude" => Some("anthropic".to_string()),
+                            "gemini" => Some("google".to_string()),
+                            "azure" => Some("openai".to_string()),
+                            "custom" => Some("custom".to_string()),
+                            _ => Some(api_type),
+                        });
                 Ok(ApiEntry {
                     id: row.get(0)?,
                     channel_id: row.get(1)?,
@@ -262,8 +280,9 @@ impl Database {
                     circuit_state: "closed".to_string(),
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
-                    channel_name: row.get(8)?,
-                    channel_api_type: row.get(9)?,
+                    channel_name: row.get(8).ok(),
+                    channel_api_type: row.get(9).ok(),
+                    owned_by,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()

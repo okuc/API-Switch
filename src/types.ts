@@ -76,6 +76,8 @@ export interface ApiEntry {
   // Joined from channel
   channel_name?: string;
   channel_api_type?: ApiType;
+  // Model provider (e.g. "openai", "anthropic", "google")
+  owned_by?: string;
 }
 
 export interface CreateEntryParams {

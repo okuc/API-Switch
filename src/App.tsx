@@ -13,7 +13,6 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { ProxyToggle } from "@/components/proxy/ProxyToggle";
 import { ApiPoolPage } from "@/pages/ApiPoolPage";
 import { ChannelPage } from "@/pages/ChannelPage";
 import { TokenPage } from "@/pages/TokenPage";
@@ -61,13 +60,6 @@ export default function App() {
         <div className="flex items-center gap-2 px-4 py-4">
           <Power className="h-5 w-5 text-primary" />
           <span className="text-lg font-semibold">API Switch</span>
-        </div>
-
-        <Separator />
-
-        {/* Proxy Toggle */}
-        <div className="px-3 py-3">
-          <ProxyToggle />
         </div>
 
         <Separator />

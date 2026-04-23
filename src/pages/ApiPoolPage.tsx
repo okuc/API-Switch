@@ -21,8 +21,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { listEntries, toggleEntry, reorderEntries, listChannels, createEntry } from "@/lib/api";
-import type { ApiEntry, Channel } from "@/types";
+import type { ApiEntry, Channel, ApiType } from "@/types";
 import { cn } from "@/lib/utils";
+import { API_TYPE_OPTIONS } from "@/types";
 import {
   DndContext,
   closestCenter,
@@ -93,11 +94,12 @@ function SortablePoolEntryCard({ entry }: { entry: ApiEntry }) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <StatusDot state={entry.enabled ? entry.circuit_state : "disabled"} />
+            <StatusDot state={entry.enabled ? "closed" : "disabled"} />
             <span className="font-medium truncate">{entry.display_name}</span>
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {entry.channel_name} / {entry.model}
+            {entry.channel_name || "—"} / {entry.model}
+            {entry.owned_by && `  |  ${entry.owned_by}`}
           </p>
         </div>
         <Switch
@@ -201,31 +203,14 @@ export function ApiPoolPage() {
       </div>
 
       <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex gap-2 flex-wrap">
-              <Input
-                className="w-[36rem] max-w-full"
-                placeholder={t("apiPool.search")}
-                value={filterText}
-                onChange={(e) => setFilterText(e.target.value)}
-              />
-              <Select value={filterChannel} onValueChange={setFilterChannel}>
-                <SelectTrigger className="w-56">
-                  <SelectValue placeholder={t("apiPool.filterChannel")} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">{t("common.all")}</SelectItem>
-                  {channels?.map((channel) => (
-                    <SelectItem key={channel.id} value={channel.id}>
-                      {channel.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </CardHeader>
+<CardHeader className="pb-3">
+            <Input
+              className="flex-1"
+              placeholder={t("apiPool.search")}
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+            />
+          </CardHeader>
         <CardContent>
           {!entries?.length ? (
             <div className="flex h-48 items-center justify-center text-muted-foreground">
