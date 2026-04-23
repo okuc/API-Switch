@@ -1,0 +1,56 @@
+use crate::error::AppError;
+use crate::proxy::ProxyStatus;
+use crate::AppState;
+use tauri::State;
+
+#[tauri::command]
+pub async fn start_proxy(state: State<'_, AppState>) -> Result<ProxyStatus, AppError> {
+    let settings = state.db.get_settings()?;
+    let port = settings.listen_port;
+
+    let mut proxy_guard = state.proxy.write().await;
+    if proxy_guard.is_some() {
+        return Err(AppError::Proxy("Proxy already running".to_string()));
+    }
+
+    let server = crate::proxy::ProxyServer::new(port, state.db.clone());
+    server.start().await.map_err(|e| AppError::Proxy(e.to_string()))?;
+
+    let status = ProxyStatus {
+        running: true,
+        address: "127.0.0.1".to_string(),
+        port,
+    };
+
+    *proxy_guard = Some(server);
+
+    // Update config
+    state.db.set_config_value("proxy_enabled", "1")?;
+
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn stop_proxy(state: State<'_, AppState>) -> Result<(), AppError> {
+    let mut proxy_guard = state.proxy.write().await;
+    if let Some(server) = proxy_guard.take() {
+        server.stop().await.map_err(|e| AppError::Proxy(e.to_string()))?;
+    }
+    state.db.set_config_value("proxy_enabled", "0")?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_proxy_status(state: State<'_, AppState>) -> Result<ProxyStatus, AppError> {
+    let proxy_guard = state.proxy.read().await;
+    let settings = state.db.get_settings()?;
+
+    Ok(match proxy_guard.as_ref() {
+        Some(server) => server.get_status(),
+        None => ProxyStatus {
+            running: false,
+            address: "127.0.0.1".to_string(),
+            port: settings.listen_port,
+        },
+    })
+}
