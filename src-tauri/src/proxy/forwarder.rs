@@ -1,5 +1,6 @@
 use super::circuit_breaker::CircuitBreaker;
 use super::handlers::ProxyError;
+use super::protocol::get_adapter;
 use super::server::ProxyState;
 use crate::database::{AccessKey, ApiEntry};
 use axum::body::Body;
@@ -119,15 +120,20 @@ async fn forward_single(
         .get_channel(&entry.channel_id)
         .map_err(|e| ProxyError::Internal(e.to_string()))?;
 
-    let base_url = channel.base_url.trim_end_matches('/');
-    let url = format!("{}/v1/chat/completions", base_url);
-    let upstream_body = build_upstream_body(body, &entry.model);
+    // Get protocol adapter for this channel type
+    let adapter = get_adapter(&channel.api_type);
 
-    // Build the request
+    // Build URL via adapter (handles Azure deployment, Gemini query auth, etc.)
+    let url = adapter.build_chat_url(&channel.base_url, &entry.model);
+
+    // Transform request body via adapter (Claude format conversion, Azure model removal, etc.)
+    let mut upstream_body = body.clone();
+    adapter.transform_request(&mut upstream_body, &entry.model);
+
+    // Build the request with adapter auth
     let client = reqwest::Client::new();
-    let mut request = client
-        .post(&url)
-        .bearer_auth(&channel.api_key)
+    let mut request = adapter
+        .apply_auth(client.post(&url), &channel.api_key)
         .json(&upstream_body);
 
     if is_stream {
@@ -147,8 +153,11 @@ async fn forward_single(
         )));
     }
 
+    let status_code = response.status().as_u16() as i32;
+
     if is_stream {
-        let status_code = response.status().as_u16() as i32;
+        let needs_transform = adapter.needs_sse_transform();
+
         let response = build_streaming_response(
             state,
             entry,
@@ -156,6 +165,8 @@ async fn forward_single(
             requested_model,
             response,
             status_code,
+            needs_transform,
+            adapter,
         );
 
         return Ok(ForwardResult {
@@ -166,13 +177,15 @@ async fn forward_single(
             status_code,
         });
     } else {
-        let status_code = response.status().as_u16() as i32;
-
-        // Non-stream: forward the JSON response
-        let response_body: Value = response
+        // Non-stream: forward the JSON response, transform if needed
+        let mut response_body: Value = response
             .json()
             .await
             .map_err(|e| ProxyError::Internal(format!("Failed to parse response: {e}")))?;
+
+        // Transform response (e.g. Claude Anthropic → OpenAI format)
+        adapter.transform_response(&mut response_body);
+
         let (prompt_tokens, completion_tokens) = extract_usage_tokens(&response_body);
 
         Ok(ForwardResult {
@@ -183,14 +196,6 @@ async fn forward_single(
             status_code,
         })
     }
-}
-
-fn build_upstream_body(body: &Value, actual_model: &str) -> Value {
-    let mut upstream_body = body.clone();
-    if let Some(object) = upstream_body.as_object_mut() {
-        object.insert("model".to_string(), Value::String(actual_model.to_string()));
-    }
-    upstream_body
 }
 
 fn extract_usage_tokens(body: &Value) -> (i64, i64) {
@@ -214,6 +219,8 @@ fn build_streaming_response(
     requested_model: &str,
     response: reqwest::Response,
     status_code: i32,
+    needs_transform: bool,
+    adapter: Box<dyn super::protocol::ProtocolAdapter + Send>,
 ) -> axum::response::Response {
     let start = Instant::now();
     let db = state.db.clone();
@@ -235,12 +242,31 @@ fn build_streaming_response(
                     first_token_ms.store(start.elapsed().as_millis() as i64, Ordering::Relaxed);
                 }
 
-                append_and_parse_sse(
-                    &mut sse_buffer,
-                    &chunk,
-                    &prompt_tokens,
-                    &completion_tokens,
-                );
+                if needs_transform {
+                    // Claude: parse SSE lines, transform, re-emit
+                    if let Some(transformed) = transform_sse_chunk(
+                        &chunk,
+                        &mut sse_buffer,
+                        &adapter,
+                        &prompt_tokens,
+                        &completion_tokens,
+                    ) {
+                        return Poll::Ready(Some(Ok(transformed)));
+                    } else {
+                        // Partial SSE line buffered — need more upstream data.
+                        // Wake the task so the executor re-polls for the next chunk.
+                        cx.waker().wake_by_ref();
+                        return Poll::Pending;
+                    }
+                } else {
+                    // OpenAI/Custom/Gemini/Azure: passthrough original bytes, extract usage on the side
+                    append_and_parse_sse(
+                        &mut sse_buffer,
+                        &chunk,
+                        &prompt_tokens,
+                        &completion_tokens,
+                    );
+                }
 
                 Poll::Ready(Some(Ok(chunk)))
             }
@@ -300,6 +326,61 @@ fn build_streaming_response(
         .unwrap()
 }
 
+/// Transform SSE chunk for protocols that need it (e.g. Claude Anthropic → OpenAI format).
+/// Returns Some(transformed bytes) or None if no complete SSE events were produced.
+fn transform_sse_chunk(
+    chunk: &Bytes,
+    buffer: &mut String,
+    adapter: &Box<dyn super::protocol::ProtocolAdapter + Send>,
+    prompt_tokens: &Arc<AtomicI64>,
+    completion_tokens: &Arc<AtomicI64>,
+) -> Option<Bytes> {
+    buffer.push_str(&String::from_utf8_lossy(chunk));
+
+    let mut output = Vec::new();
+
+    while let Some(line_end) = buffer.find('\n') {
+        let mut line = buffer.drain(..=line_end).collect::<String>();
+        if line.ends_with('\n') {
+            line.pop();
+        }
+        if line.ends_with('\r') {
+            line.pop();
+        }
+
+        let Some(payload) = line.strip_prefix("data: ") else {
+            continue;
+        };
+
+        if payload == "[DONE]" {
+            output.push(b"data: [DONE]\n".to_vec());
+            continue;
+        }
+
+        // Extract usage before transform (adapter knows the upstream format)
+        let (prompt, completion) = adapter.extract_sse_usage(payload);
+        if prompt > 0 {
+            prompt_tokens.store(prompt, Ordering::Relaxed);
+        }
+        if completion > 0 {
+            completion_tokens.store(completion, Ordering::Relaxed);
+        }
+
+        // Transform the SSE line
+        if let Some(transformed) = adapter.transform_sse_line(payload) {
+            output.push(format!("data: {transformed}\n").into_bytes());
+        }
+        // None → drop the line (e.g. Claude ping, content_block_stop)
+    }
+
+    if output.is_empty() {
+        None
+    } else {
+        Some(Bytes::from(output.concat()))
+    }
+}
+
+/// Passthrough SSE chunk — extract usage on the side without modifying the bytes.
 fn append_and_parse_sse(
     buffer: &mut String,
     chunk: &Bytes,

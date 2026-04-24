@@ -1,7 +1,7 @@
 # API Switch - 项目计划书
 
 > Personal API Management & Forwarding Center
-> 版本: 0.1.4-dev | 生成日期: 2026-04-24
+> 版本: 0.1.5-dev | 生成日期: 2026-04-24
 
 ---
 
@@ -112,6 +112,7 @@
 - `ProxyServer`: 持有 port、`ProxyState`、`shutdown_tx`
 - 基于 tokio TcpListener + axum serve，支持 graceful shutdown
 - 路由: `/health`, `/v1/chat/completions`, `/v1/models`
+- CORS 中间件 (`tower-http`)，允许 WebView 跨域访问
 
 #### `proxy/handlers.rs` (138行) — 请求处理
 - `health_check`: 健康检查
@@ -130,13 +131,13 @@
 - 从 `Authorization: Bearer <key>` 提取密钥
 - `access_key_required` 开启时强制验证，关闭时仅用于身份追踪
 
-#### `proxy/forwarder.rs` (481行) — 请求转发
+#### `proxy/forwarder.rs` (499行) — 请求转发
 - 按条目列表逐个尝试（failover）
 - 通过 `protocol::get_adapter()` 获取适配器，统一调用 trait 方法
 - 支持流式 (SSE) 和非流式响应
   - SSE: 根据 `adapter.needs_sse_transform()` 分两条路径
     - OpenAI/Custom/Gemini/Azure: 原始字节透传，旁路提取 usage
-    - Claude: 解析→转换→重建（Anthropic SSE → OpenAI chunk 格式）
+    - Claude: 解析→转换→重建（Anthropic SSE → OpenAI chunk 格式），部分 SSE 行缓存时 `cx.waker().wake_by_ref()` 防止流挂起
 - Token 用量统计（从响应中提取 prompt/completion tokens）
 - 记录首次 token 延迟 (first_token_ms)
 - 成功/失败反馈到熔断器
@@ -169,6 +170,7 @@
 | `usage` | get_usage_logs, get_dashboard_stats, get_model_consumption, get_call_trend, get_model/user_distribution, get_model/user_ranking | 统计数据 |
 | `config` | get_settings, update_settings | 全局配置 |
 | `proxy_cmd` | start_proxy, stop_proxy, get_proxy_status | 代理服务器控制 |
+| `test_chat` | test_chat | API 池测试对话（非流式，返回内容+耗时+token） |
 
 ### 3.2 前端模块 (`src/`)
 
@@ -188,12 +190,12 @@
 
 | 页面 | 文件 | 功能 |
 |------|------|------|
-| API Pool | `ApiPoolPage.tsx` (549行) | 条目列表 + 拖拽排序 + 新建弹窗 + 模型测试弹窗 + 模型能力标签 |
+| API Pool | `ApiPoolPage.tsx` (358行) | 条目列表 + 拖拽排序 + 新建弹窗 + 测试对话弹窗（耗时+token显示） |
 | Channel | `ChannelPage.tsx` (815行) | 平铺列表 + 操作列（导入/编辑/删除） + 创建/编辑弹窗 + 导入模型弹窗（含拉取） + 连通性测试弹窗 + TanStack React Query |
 | Token | `TokenPage.tsx` | 密钥列表 + 创建/删除 + 启停 + Key 复制 |
 | Logs | `LogPage.tsx` (267行) | 请求日志分页 + 多维筛选 + 详情展开 |
 | Dashboard | `DashboardPage.tsx` (451行) | 统计概览 + 6图表（调用趋势/模型分布/模型排名/用户排名/用户趋势/模型消费） |
-| Settings | `SettingsPage.tsx` (148行) | 代理端口/开关 + 熔断参数 + 语言/主题切换 |
+| Settings | `SettingsPage.tsx` (148行) | 代理端口/开关（联动启停） + 熔断参数 + 语言/主题切换 |
 
 #### `App.tsx` — 主布局
 - 左侧 6 页导航栏 (Sidebar) + 右侧内容区
@@ -264,15 +266,17 @@ ChannelPage: React Component → TanStack Query (useQuery/useMutation)
 - [x] 图表数据接口（趋势/分布/排名）
 - [x] 全局配置（KV 存储）
 - [x] 健康检查端点
-- [x] **自动启动代理**: `lib.rs` setup 中根据 `proxy_enabled` 配置自动启动代理服务器
-- [x] **渠道连通性测试**: `test_chat` 命令，通过 SSE 流式请求测量 TTFB (connect_ms) + 生成时间 (think_ms) + token 统计
+- [x] **自动启动代理**: `lib.rs` setup 中根据 `proxy_enabled` 配置自动启动代理服务器，设置页代理开关联动 start/stop
+- [x] **CORS 中间件**: `tower-http` CorsLayer 允许所有 origin，支持 WebView 跨域访问代理
+- [x] **API 池测试对话**: `test_chat` 命令，通过 Tauri IPC 直接调用 forwarder（不走 HTTP），返回内容 + 耗时 + token 统计
 
 ### 5.2 前端 UI
 - [x] 中英双语国际化 (i18next)
 - [x] 亮色/暗色/跟随系统主题
 - [x] Dashboard 页面（统计卡片 + 6 种 Recharts 图表）
 - [x] Channel 管理页面（平铺列表 + 操作列导入/编辑/删除 + 创建/编辑弹窗 + 导入模型弹窗含拉取 + 连通性测试弹窗 + TanStack React Query）
-- [x] API Pool 页面（拖拽排序 @dnd-kit + 新建弹窗 + 模型测试弹窗 + 模型能力标签 + 渠道/模型双行显示）
+- [x] API Pool 页面（拖拽排序 @dnd-kit + 新建弹窗 + 测试对话弹窗 + 渠道/模型双行显示）
+- [x] **TestChatDialog 组件**: 测试对话弹窗，通过 Tauri IPC 调用后端 forwarder，显示响应耗时（秒）和 token 统计（IN/OUT）
 - [x] Token 密钥管理页面（独立页面，创建/删除/启停 + Key 复制）
 - [x] Log 日志页面（分页 + 多维筛选 + 详情展开）
 - [x] Settings 设置页面（代理/熔断/语言/主题）
@@ -375,14 +379,15 @@ api-switch/
 │       │   ├── token.rs                    # 密钥命令
 │       │   ├── usage.rs                    # 统计命令
 │       │   ├── config.rs                   # 配置命令
-│       │   └── proxy_cmd.rs               # 代理控制命令
+│       │   ├── proxy_cmd.rs               # 代理控制命令
+│       │   └── test_chat.rs              # API 池测试对话命令 (含耗时+token)
 │       └── proxy/
 │           ├── mod.rs                      # 模块导出
 │           ├── server.rs                   # Axum 服务器
 │           ├── handlers.rs                 # 请求处理 (138行)
 │           ├── router.rs                   # 智能路由
 │           ├── auth.rs                     # 认证
-│           ├── forwarder.rs                # 转发 + 重试 (491行)
+│           ├── forwarder.rs                # 转发 + 重试 (499行)
 │           ├── circuit_breaker.rs          # 熔断器
 │           └── protocol/                   # 协议适配 (trait 模块化架构)
 │               ├── mod.rs                  # ProtocolAdapter trait + get_adapter() + 88个测试 (1200行)
@@ -397,8 +402,13 @@ api-switch/
 │   ├── App.tsx                             # 主布局 + 路由
 │   ├── types.ts                            # 完整类型定义 (234行)
 │   ├── lib/
-│   │   ├── api.ts                          # Tauri IPC 封装 (171行)
+│   │   ├── api.ts                          # Tauri IPC 封装 (154行)
 │   │   └── utils.ts                        # cn() 工具
+│   ├── components/
+│   │   ├── ui/                             # Radix UI 组件
+│   │   └── proxy/
+│   │       ├── ProxyToggle.tsx             # 代理启停按钮
+│   │       └── TestChatDialog.tsx          # 测试对话弹窗 (耗时+token)
 │   └── pages/
 │       ├── DashboardPage.tsx               # Dashboard (451行)
 │       ├── ChannelPage.tsx                 # 渠道管理 (888行)
@@ -412,24 +422,24 @@ api-switch/
 
 ## 10. 变更日志
 
-### 2026-04-23 — Bug 修复 + 前端重构 + PLAN 同步（v0.1.3-dev）
+### 2026-04-24 — Protocol 接入 + 测试对话 + 代理自启（v0.1.5-dev）
 
-**改动文件**: 15 个文件，+981 行 / -305 行
+**改动文件**: 13 个文件，+550 行 / -100 行
 
 | # | 改动项 | 说明 |
 |---|--------|------|
-| 1 | **Gemini 内存泄漏** | `gemini.rs` 两处 `str.to_lowercase().leak()` 改为 `.to_string()` |
-| 2 | **CircuitBreaker recovery_secs** | `new()` 改为 `new(recovery_secs: u64)`，`forwarder.rs` 从 DB 配置注入 |
-| 3 | **未使用 SQL 列** | `get_enabled_entries_for_routing` 移除未读取的 `c.base_url, c.api_key` |
-| 4 | **未使用变量** | `gemini.rs` 移除未使用的 `tool_calls` 变量 |
-| 5 | **ChannelPage 重构** | 接入 TanStack React Query（useQuery/useMutation + optimistic update）；编辑改为弹窗；新增导入模型弹窗（ImportModelsDialog）和连通性测试弹窗（ModelTestDialog）；模型 chip 点击名称可测试、× 可删除；删除底部重复导入按钮 |
-| 6 | **ApipoolPage 重构** | 新建条目改为弹窗（CreateEntryDialog），支持从渠道选择模型或手动输入 |
-| 7 | **i18n 更新** | 中英文 JSON 补充 channel.models.* 和 apiPool.* 系列 key |
-| 8 | **types.ts 扩展** | 新增 ModelInfo.owned_by、API_TYPE_OPTIONS/DEFAULT_URLS/URL_HINTS/KEY_HINTS 等常量 |
-| 9 | **lib/api.ts 扩展** | 新增 testChat / selectModels / createEntry 等封装 |
-| 10 | **App.tsx 导航更新** | 移除旧 Sidebar 内嵌组件，改为纯页面切换 |
+| 1 | **protocol 模块接入 forwarder** | `forwarder.rs` 全面改用 `get_adapter()` 构建 URL/认证/转换请求/响应/SSE，替代硬编码 OpenAI 逻辑 |
+| 2 | **protocol 模块接入 channel** | `commands/channel.rs` 的 `fetch_models_from_api()` 改用适配器，删除 60+ 行 `match api_type` |
+| 3 | **proxy/mod.rs 模块导出** | 添加 `mod protocol` + `pub(crate)` 导出 `ProxyState`/`forward_with_retry`/`resolve`/`circuit_breaker` |
+| 4 | **SSE 流式防挂起** | `transform_sse_chunk` 返回 `None` 时添加 `cx.waker().wake_by_ref()`，防止 Claude 流式挂起 |
+| 5 | **测试对话功能** | 新增 `TestChatDialog.tsx` + `commands/test_chat.rs`，API 池每条目旁加测试按钮，通过 Tauri IPC 直接调用 forwarder（绕过 WebView CORS） |
+| 6 | **耗时 + Token 显示** | 后端返回 `latency_ms` + `usage`，前端在 assistant 消息底部显示秒数和 IN/OUT tokens |
+| 7 | **CORS 中间件** | `tower-http` CorsLayer 允许所有 origin，支持 WebView 跨域访问代理 |
+| 8 | **代理自动启动** | `lib.rs` setup 中根据 `proxy_enabled` 配置自动启动代理服务器 |
+| 9 | **代理开关联动** | 设置页"启用代理"开关改为实际调用 start/stop proxy，状态读取代理实际运行状态 |
+| 10 | **i18n 补充** | 中英文添加 `apiPool.testChat` 系列 key |
 
-**编译状态**: `cargo check` 0 errors, 12 warnings（均为 dead_code 备选代码） | `pnpm typecheck` 0 errors
+**编译状态**: `cargo check` 0 errors, 12 warnings（均为 dead_code） | `pnpm typecheck` 0 errors | 92 tests passed
 
 ---
 

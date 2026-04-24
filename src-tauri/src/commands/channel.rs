@@ -1,5 +1,6 @@
 use crate::database::{Channel, ModelInfo};
 use crate::error::AppError;
+use crate::proxy::protocol::get_adapter;
 use crate::AppState;
 use serde::Deserialize;
 use tauri::State;
@@ -66,7 +67,7 @@ pub async fn fetch_models(
 ) -> Result<Vec<ModelInfo>, AppError> {
     let channel = state.db.get_channel(&channel_id)?;
 
-    // Fetch models from upstream API
+    // Fetch models from upstream API via protocol adapter
     let models = fetch_models_from_api(&channel.api_type, &channel.base_url, &channel.api_key).await?;
 
     // Update available_models in DB
@@ -92,27 +93,13 @@ async fn fetch_models_from_api(
     base_url: &str,
     api_key: &str,
 ) -> Result<Vec<ModelInfo>, AppError> {
-    let url = match api_type {
-        "openai" | "custom" => format!("{}/v1/models", base_url.trim_end_matches('/')),
-        "claude" => format!("{}/v1/models", base_url.trim_end_matches('/')),
-        "gemini" => format!(
-            "{}/v1beta/models?key={}",
-            base_url.trim_end_matches('/'),
-            api_key
-        ),
-        "azure" => format!(
-            "{}/openai/deployments?api-version=2024-02-01",
-            base_url.trim_end_matches('/')
-        ),
-        _ => return Err(AppError::Validation(format!("Unknown api_type: {api_type}"))),
-    };
+    let adapter = get_adapter(api_type);
+
+    // Use adapter to build URL, auth, and parse response
+    let url = adapter.build_models_url(base_url, api_key);
 
     let client = reqwest::Client::new();
-    let mut request = client.get(&url);
-
-    if api_type != "gemini" {
-        request = request.bearer_auth(api_key);
-    }
+    let request = adapter.apply_auth(client.get(&url), api_key);
 
     let response = request
         .send()
@@ -132,66 +119,16 @@ async fn fetch_models_from_api(
         .await
         .map_err(|e| AppError::Network(format!("Failed to parse models response: {e}")))?;
 
-    // Parse models from different API formats
-    let models = match api_type {
-        "openai" | "custom" | "azure" => {
-            // OpenAI format: { data: [{ id, owned_by }] }
-            body.get("data")
-                .and_then(|d| d.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|m| {
-                            let id = m.get("id")?.as_str()?.to_string();
-                            Some(ModelInfo {
-                                name: id.clone(),
-                                id,
-                                owned_by: m.get("owned_by").and_then(|v| v.as_str()).map(String::from),
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        }
-        "claude" => {
-            // Anthropic format: { data: [{ id, display_name }] }
-            body.get("data")
-                .and_then(|d| d.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|m| {
-                            let id = m.get("id")?.as_str()?.to_string();
-                            Some(ModelInfo {
-                                name: id.clone(),
-                                id,
-                                owned_by: m.get("owned_by").and_then(|v| v.as_str()).map(String::from),
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        }
-        "gemini" => {
-            // Gemini format: { models: [{ name, displayName }] }
-            body.get("models")
-                .and_then(|d| d.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|m| {
-                            let name = m.get("name")?.as_str()?.to_string();
-                            // Gemini names are like "models/gemini-pro"
-                            let id = name.strip_prefix("models/").unwrap_or(&name).to_string();
-                            Some(ModelInfo {
-                                name: id.clone(),
-                                id,
-                                owned_by: m.get("owned_by").and_then(|v| v.as_str()).map(String::from),
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        }
-        _ => vec![],
-    };
+    // Use adapter to parse models response
+    let models = adapter
+        .parse_models_response(&body)
+        .into_iter()
+        .map(|(id, owned_by)| ModelInfo {
+            name: id.clone(),
+            id,
+            owned_by,
+        })
+        .collect::<Vec<_>>();
 
     // Deduplicate by name
     let mut seen = std::collections::HashSet::new();

@@ -28,6 +28,11 @@
       "normal": "Normal",
       "broken": "Circuit Open",
       "disabled": "Disabled"
+    },
+    "testChat": {
+      "title": "Test Chat",
+      "placeholder": "Type a message to test...",
+      "inputPlaceholder": "Type a message... (Enter to send)"
     }
   },
   "channel": {

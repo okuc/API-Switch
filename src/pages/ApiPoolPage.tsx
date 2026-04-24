@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { GripVertical, Plus } from "lucide-react";
+import { GripVertical, Plus, MessageSquare } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -24,6 +24,7 @@ import { listEntries, toggleEntry, reorderEntries, listChannels, createEntry } f
 import type { ApiEntry, Channel, ApiType } from "@/types";
 import { cn } from "@/lib/utils";
 import { API_TYPE_OPTIONS } from "@/types";
+import { TestChatDialog } from "@/components/proxy/TestChatDialog";
 import {
   DndContext,
   closestCenter,
@@ -54,7 +55,13 @@ function StatusDot({ state }: { state: string }) {
   );
 }
 
-function SortablePoolEntryCard({ entry }: { entry: ApiEntry }) {
+function SortablePoolEntryCard({
+  entry,
+  onTest,
+}: {
+  entry: ApiEntry;
+  onTest: (entry: ApiEntry) => void;
+}) {
   const queryClient = useQueryClient();
 
   const toggleMutation = useMutation({
@@ -102,6 +109,14 @@ function SortablePoolEntryCard({ entry }: { entry: ApiEntry }) {
             {entry.owned_by && `  |  ${entry.owned_by}`}
           </p>
         </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+          onClick={() => onTest(entry)}
+        >
+          <MessageSquare className="h-4 w-4" />
+        </Button>
         <Switch
           checked={entry.enabled}
           onCheckedChange={(checked) => toggleMutation.mutate(checked)}
@@ -118,6 +133,7 @@ export function ApiPoolPage() {
   const [filterText, setFilterText] = useState("");
   const [filterChannel, setFilterChannel] = useState<string>("all");
   const [showAdd, setShowAdd] = useState(false);
+  const [testEntry, setTestEntry] = useState<ApiEntry | null>(null);
 
   const { data: entries, isLoading } = useQuery({
     queryKey: ["entries"],
@@ -228,7 +244,7 @@ export function ApiPoolPage() {
               >
                 <div className="grid gap-3">
                   {filteredEntries.map((entry) => (
-                    <SortablePoolEntryCard key={entry.id} entry={entry} />
+                    <SortablePoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} />
                   ))}
                 </div>
               </SortableContext>
@@ -238,6 +254,7 @@ export function ApiPoolPage() {
       </Card>
 
       <AddApiDialog open={showAdd} onOpenChange={setShowAdd} channels={channels || []} />
+      <TestChatDialog open={!!testEntry} onOpenChange={(v) => !v && setTestEntry(null)} entry={testEntry} />
     </div>
   );
 }

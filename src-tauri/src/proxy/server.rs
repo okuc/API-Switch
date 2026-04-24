@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{oneshot, RwLock};
+use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyStatus {
@@ -55,10 +56,16 @@ impl ProxyServer {
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any);
+
         let app = Router::new()
             .route("/health", get(handlers::health_check))
             .route("/v1/chat/completions", post(handlers::handle_chat_completions))
             .route("/v1/models", get(handlers::handle_list_models))
+            .layer(cors)
             .with_state(self.state.clone());
 
         let listener = tokio::net::TcpListener::bind(&addr)

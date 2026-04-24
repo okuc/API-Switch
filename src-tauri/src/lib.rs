@@ -32,6 +32,25 @@ pub fn run() {
             };
             app.manage(state);
 
+            // Auto-start proxy if proxy_enabled is set
+            let handle = app.handle().clone();
+            tauri::async_runtime::block_on(async {
+                let app_state = handle.state::<AppState>();
+                if let Ok(settings) = app_state.db.get_settings() {
+                    if settings.proxy_enabled {
+                        let port = settings.listen_port;
+                        let server = ProxyServer::new(port, app_state.db.clone());
+                        if let Err(e) = server.start().await {
+                            log::error!("Failed to auto-start proxy: {e}");
+                        } else {
+                            let mut proxy_guard = app_state.proxy.write().await;
+                            *proxy_guard = Some(server);
+                            log::info!("Proxy auto-started on port {port}");
+                        }
+                    }
+                }
+            });
+
             log::info!("API Switch initialized");
             Ok(())
         })
@@ -69,6 +88,8 @@ pub fn run() {
             commands::proxy_cmd::start_proxy,
             commands::proxy_cmd::stop_proxy,
             commands::proxy_cmd::get_proxy_status,
+            // Test Chat
+            commands::test_chat::test_chat,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

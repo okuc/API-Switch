@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { getSettings, updateSettings, getProxyStatus } from "@/lib/api";
+import { getSettings, updateSettings, getProxyStatus, startProxy, stopProxy } from "@/lib/api";
 import { DEFAULT_SETTINGS } from "@/types";
 
 export function SettingsPage() {
@@ -68,8 +68,20 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <Label>{t("settings.proxy.enabled")}</Label>
             <Switch
-              checked={s.proxy_enabled}
-              onCheckedChange={(v) => update("proxy_enabled", v)}
+              checked={proxyStatus?.running ?? s.proxy_enabled}
+              onCheckedChange={async (v) => {
+                try {
+                  if (v) {
+                    await startProxy();
+                  } else {
+                    await stopProxy();
+                  }
+                  queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
+                  queryClient.invalidateQueries({ queryKey: ["settings"] });
+                } catch (err) {
+                  console.error("Failed to toggle proxy:", err);
+                }
+              }}
             />
           </div>
           {proxyStatus?.running && (
