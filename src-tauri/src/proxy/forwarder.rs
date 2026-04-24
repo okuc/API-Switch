@@ -1,9 +1,8 @@
-use super::circuit_breaker::CircuitBreaker;
+use super::circuit_breaker::{parse_status_codes, CircuitBreaker};
 use super::handlers::ProxyError;
 use super::protocol::get_adapter;
 use super::server::ProxyState;
-use crate::database::Database;
-use crate::database::{AccessKey, ApiEntry};
+use crate::database::{AccessKey, ApiEntry, Database};
 use axum::body::Body;
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
@@ -14,6 +13,15 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Instant;
+
+/// Parse newline-separated keywords into lowercase Vec.
+fn parse_keywords(input: &str) -> Vec<String> {
+    input
+        .lines()
+        .map(|line| line.trim().to_lowercase())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
 
 /// Forward error with upstream status code (0 = connection failure).
 type ForwardError = (String, u16);
@@ -26,8 +34,9 @@ struct ForwardResult {
     status_code: i32,
 }
 
-/// StreamLogGuard: writes usage log when dropped.
-/// Captured by `poll_fn`'s `move` closure, so it lives as long as the stream body.
+/// StreamLogGuard: safety net for writing usage log when stream is dropped
+/// without reaching Poll::Ready(None) (e.g. client disconnect).
+/// Primary log writing happens in Poll::Ready(None) — this guard is fallback only.
 struct StreamLogGuard {
     logged: Arc<AtomicBool>,
     db: Arc<Database>,
@@ -43,12 +52,12 @@ struct StreamLogGuard {
 
 impl Drop for StreamLogGuard {
     fn drop(&mut self) {
-        if !self.logged.swap(true, Ordering::Relaxed) {
+        if !self.logged.swap(true, Ordering::SeqCst) {
             log_usage(
                 &self.db, self.access_key.as_ref(), &self.entry, &self.requested_model,
-                true, self.prompt_tokens.load(Ordering::Relaxed),
-                self.completion_tokens.load(Ordering::Relaxed),
-                self.first_token_ms.load(Ordering::Relaxed),
+                true, self.prompt_tokens.load(Ordering::SeqCst),
+                self.completion_tokens.load(Ordering::SeqCst),
+                self.first_token_ms.load(Ordering::SeqCst),
                 self.start.elapsed().as_millis() as i64,
                 self.status_code, true, None,
             );
@@ -57,6 +66,11 @@ impl Drop for StreamLogGuard {
 }
 
 /// Forward a request to the resolved entries with retry/failover.
+///
+/// Design follows NEW-API's pattern:
+/// 1. Always write usage log for every attempt
+/// 2. process_entry_error() — side effects only (disable entry, record circuit)
+/// 3. should_retry() — independent decision whether to try next entry
 pub async fn forward_with_retry(
     state: &ProxyState,
     entries: &[ApiEntry],
@@ -68,6 +82,19 @@ pub async fn forward_with_retry(
 ) -> Result<axum::response::Response, ProxyError> {
     // Read circuit config once
     let settings = state.db.get_settings().ok();
+    let disable_codes = settings
+        .as_ref()
+        .map(|s| parse_status_codes(&s.circuit_disable_codes))
+        .unwrap_or_default();
+    let retry_codes = settings
+        .as_ref()
+        .map(|s| parse_status_codes(&s.circuit_retry_codes))
+        .unwrap_or_default();
+    let disable_keywords = settings
+        .as_ref()
+        .map(|s| parse_keywords(&s.disable_keywords))
+        .unwrap_or_default();
+
     let mut last_error: Option<(String, u16)> = None;
 
     for entry in entries {
@@ -103,14 +130,23 @@ pub async fn forward_with_retry(
                 let latency_ms = elapsed.as_millis() as i64;
                 let log_status = if status > 0 { status as i32 } else { 502 };
 
-                // Write usage log
+                // Step 1: Always write usage log for every failed attempt
                 log_usage(
                     &state.db, access_key, entry, requested_model,
                     is_stream, 0, 0, 0, latency_ms, log_status, false, Some(&e),
                 );
 
-                // Record circuit breaker failure
-                record_circuit_failure(state, &entry.id).await;
+                // Step 2: process_entry_error — side effects only
+                let action = process_entry_error(
+                    state, entry, &e, status,
+                    &disable_codes, &retry_codes, &disable_keywords,
+                ).await;
+
+                // Step 3: should_retry — independent decision
+                if !action.should_retry {
+                    last_error = Some((e, status));
+                    break;
+                }
 
                 last_error = Some((e, status));
                 continue;
@@ -119,8 +155,87 @@ pub async fn forward_with_retry(
     }
 
     Err(last_error
-        .map(|(e, _)| ProxyError::Internal(e))
+        .map(|(msg, status)| {
+            if status > 0 {
+                ProxyError::Upstream { status, message: msg }
+            } else {
+                ProxyError::Internal(msg)
+            }
+        })
         .unwrap_or(ProxyError::AllProvidersFailed))
+}
+
+/// Result of process_entry_error: tells the caller whether to retry or stop.
+struct ErrorAction {
+    should_retry: bool,
+}
+
+/// Process entry error — side effects only (NEW-API pattern: processChannelError).
+///
+/// Three independent mechanisms, separated by design:
+///
+/// 1. Keyword match → disable this entry (entry is fundamentally broken)
+///    Still retries next entry — the current request should still try other providers.
+///
+/// 2. disable_codes match → record circuit failure (e.g. 401 = key invalid)
+///    Still retries next entry — disabling is a side-effect for future requests,
+///    not a signal to abort the current request.
+///
+/// 3. Circuit breaker → trip on server errors (5xx) and connection failures (0)
+///    4xx (401/403/429) are client/credential issues — failover but don't punish entry.
+///
+/// 4. Retry decision:
+///    - 504/524 → NO retry (gateway timeout, hardcoded)
+///    - status in retry_codes → YES retry
+///    - else → NO retry
+async fn process_entry_error(
+    state: &ProxyState,
+    entry: &ApiEntry,
+    error_message: &str,
+    status: u16,
+    disable_codes: &[u16],
+    retry_codes: &[u16],
+    disable_keywords: &[String],
+) -> ErrorAction {
+    let e_lower = error_message.to_lowercase();
+
+    // 1. Keyword match → disable this entry for future requests
+    //    The entry is fundamentally broken (quota exhausted, account disabled, etc.)
+    if disable_keywords.iter().any(|kw| e_lower.contains(kw.as_str())) {
+        log::warn!(
+            "Disable keyword matched for entry {}, disabling entry",
+            entry.id
+        );
+        let _ = state.db.toggle_entry(&entry.id, false);
+        // Don't stop retrying — let the current request try other providers
+    }
+
+    // 2. disable_codes match → disable this entry for future requests
+    //    (e.g. 401 = invalid key)
+    //    Still retry current request — disable is for future, retry is for now.
+    if disable_codes.contains(&status) {
+        log::warn!(
+            "Disable status code {} matched for entry {}, disabling entry",
+            status, entry.id
+        );
+        let _ = state.db.toggle_entry(&entry.id, false);
+    }
+
+    // 3. 504/524 gateway timeout → never retry (hardcoded, same as NEW-API)
+    if status == 504 || status == 524 {
+        return ErrorAction { should_retry: false };
+    }
+
+    // 4. Circuit breaker: only trip on server errors (5xx) and connection failures (0)
+    //    4xx (401/403/429) are client/credential issues — failover but don't punish entry
+    if status >= 500 || status == 0 {
+        record_circuit_failure(state, &entry.id).await;
+    }
+
+    // 5. Retry decision based on retry_codes
+    let should_retry = retry_codes.contains(&status);
+
+    ErrorAction { should_retry }
 }
 
 async fn forward_single(
@@ -151,6 +266,9 @@ async fn forward_single(
         request = request.header("Accept", "text/event-stream");
     }
 
+    // Start timer BEFORE sending request — this measures true TTFB
+    let request_start = std::time::Instant::now();
+
     let response = request
         .send()
         .await
@@ -169,7 +287,7 @@ async fn forward_single(
         let needs_transform = adapter.needs_sse_transform();
         let response = build_streaming_response(
             state, entry, access_key, requested_model,
-            response, status_code, needs_transform, adapter,
+            response, status_code, needs_transform, adapter, request_start,
         );
         Ok(ForwardResult {
             response, prompt_tokens: 0, completion_tokens: 0,
@@ -213,8 +331,9 @@ fn build_streaming_response(
     status_code: i32,
     needs_transform: bool,
     adapter: Box<dyn super::protocol::ProtocolAdapter + Send>,
+    request_start: std::time::Instant,
 ) -> axum::response::Response {
-    let start = Instant::now();
+    let start = request_start;
     let db = state.db.clone();
     let entry = entry.clone();
     let access_key = access_key.cloned();
@@ -246,8 +365,8 @@ fn build_streaming_response(
 
         match upstream_stream.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
-                if !seen_first_chunk.swap(true, Ordering::Relaxed) {
-                    first_token_ms.store(start.elapsed().as_millis() as i64, Ordering::Relaxed);
+                if !seen_first_chunk.swap(true, Ordering::SeqCst) {
+                    first_token_ms.store(start.elapsed().as_millis() as i64, Ordering::SeqCst);
                 }
 
                 if needs_transform {
@@ -267,12 +386,12 @@ fn build_streaming_response(
                 Poll::Ready(Some(Ok(chunk)))
             }
             Poll::Ready(Some(Err(err))) => {
-                if !logged.swap(true, Ordering::Relaxed) {
+                if !logged.swap(true, Ordering::SeqCst) {
                     log_usage(
                         &db, access_key.as_ref(), &entry, &requested_model,
-                        true, prompt_tokens.load(Ordering::Relaxed),
-                        completion_tokens.load(Ordering::Relaxed),
-                        first_token_ms.load(Ordering::Relaxed),
+                        true, prompt_tokens.load(Ordering::SeqCst),
+                        completion_tokens.load(Ordering::SeqCst),
+                        first_token_ms.load(Ordering::SeqCst),
                         start.elapsed().as_millis() as i64,
                         502, false, Some(&format!("Stream error: {err}")),
                     );
@@ -280,12 +399,12 @@ fn build_streaming_response(
                 Poll::Ready(Some(Err(std::io::Error::new(std::io::ErrorKind::Other, err))))
             }
             Poll::Ready(None) => {
-                if !logged.swap(true, Ordering::Relaxed) {
+                if !logged.swap(true, Ordering::SeqCst) {
                     log_usage(
                         &db, access_key.as_ref(), &entry, &requested_model,
-                        true, prompt_tokens.load(Ordering::Relaxed),
-                        completion_tokens.load(Ordering::Relaxed),
-                        first_token_ms.load(Ordering::Relaxed),
+                        true, prompt_tokens.load(Ordering::SeqCst),
+                        completion_tokens.load(Ordering::SeqCst),
+                        first_token_ms.load(Ordering::SeqCst),
                         start.elapsed().as_millis() as i64,
                         status_code, true, None,
                     );

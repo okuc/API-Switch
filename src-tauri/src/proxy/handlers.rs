@@ -110,6 +110,9 @@ pub enum ProxyError {
 
     #[error("All providers failed")]
     AllProvidersFailed,
+
+    #[error("Upstream error {status}: {message}")]
+    Upstream { status: u16, message: String },
 }
 
 impl IntoResponse for ProxyError {
@@ -125,6 +128,10 @@ impl IntoResponse for ProxyError {
                 "All providers failed".to_string(),
             ),
             ProxyError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
+            ProxyError::Upstream { status, message } => {
+                let code = StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY);
+                (code, message.clone())
+            }
         };
 
         let body = json!({

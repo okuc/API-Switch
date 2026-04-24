@@ -1,7 +1,7 @@
 # API Switch - 项目计划书
 
 > Personal API Management & Forwarding Center
-> 版本: 0.1.5-dev | 生成日期: 2026-04-24
+> 版本: 0.1.6-dev | 生成日期: 2026-04-25
 
 ---
 
@@ -306,6 +306,9 @@ ChannelPage: React Component → TanStack Query (useQuery/useMutation)
 - [x] **AppState Clone**: 支持 Clone 以便 TrayIconBuilder 闭包捕获
 
 ### P2 — 体验优化
+- [ ] **SSE Ping 保活**: 长思考模型（o1/o3）可能在 30-60s 后因反向代理超时断开。参考 NEW-API `startPingKeepAlive` goroutine，可配置间隔发送 `: PING\n\n`
+- [ ] **流超时保护**: 当前无流式超时，上游挂死会无限等待。参考 NEW-API `streamingTimeout` ticker（默认 300s）
+- [ ] **客户端断开检测**: 客户端断开后仍等待上游完成。参考 NEW-API `c.Request.Context().Done()` 主动检测
 - [ ] **实时日志推送**: 当前日志靠轮询，可改为 Tauri Event 实时推送
 - [ ] **日志导出**: 支持导出 CSV/JSON
 - [ ] **API Key 安全**: 当前 api_key 明文存储在 SQLite，建议加密或使用系统密钥链
@@ -315,6 +318,9 @@ ChannelPage: React Component → TanStack Query (useQuery/useMutation)
 - [ ] **TanStack React Query 全量接入**: ChannelPage 已接入，其余 5 个页面待迁移
 
 ### P3 — 未来愿景
+- [ ] **重试路径记录**: 日志中记录 `重试: channel1->channel2->channel3`，参考 NEW-API `use_channel` 切片
+- [ ] **流结束原因追踪**: `StreamEndReason` 枚举（done/timeout/client_gone/scanner_error），参考 NEW-API `StreamStatus`
+- [ ] **熔断状态持久化**: 当前内存态，重启后丢失所有熔断历史
 - [ ] **多用户隔离**: 按 Access Key 做用量配额限制
 - [ ] **Web UI**: 除桌面端外提供 Web 管理界面
 - [ ] **插件系统**: 支持自定义中间件（如日志脱敏、请求改写）
@@ -352,12 +358,15 @@ pnpm build            # 生产构建
 |---|------|--------|------|
 | 1 | ~~开发环境未验证~~ | ~~高~~ | ✅ cargo check + pnpm typecheck 均通过 |
 | 2 | API Key 明文存储 | 中 | SQLite 中 api_key 未加密 |
-| 3 | 熔断状态不持久 | 低 | 重启后所有熔断重置 |
-| 4 | ~~路由层 ApiEntry 重复克隆~~ | 🟡中 | `router::resolve()` 对匹配的 ApiEntry 调用 `(*e).clone()`，`model="auto"` 时克隆所有条目。设计上应引入轻量级 `RouteEntry` 结构（仅 id/model/sort_index），由数据库层提供独立接口，避免克隆大对象。已尝试重构但因涉及链路过长（router/handlers/forwarder/dao）编译错误较多，暂缓处理，留待后续 P2-P3 优化。 |
+| 3 | 熔断状态不持久 | 低 | 重启后所有熔断重置，P3 优先级 |
+| 4 | ~~路由层 ApiEntry 重复克隆~~ | ~~🟡中~~ | `router::resolve()` 对匹配的 ApiEntry 调用 `(*e).clone()`，`model="auto"` 时克隆所有条目。设计上应引入轻量级 `RouteEntry` 结构（仅 id/model/sort_index），由数据库层提供独立接口，避免克隆大对象。已尝试重构但因涉及链路过长（router/handlers/forwarder/dao）编译错误较多，暂缓处理，留待后续 P2-P3 优化。 |
 | 5 | ~~SSE 流式回归~~ | ~~🔴高~~ | ✅ 已修复：OpenAI 兼容类型恢复原始字节透传 |
 | 6 | ~~Gemini 原生格式内存泄漏~~ | ~~🔴高~~ | ✅ 已修复：`str.to_lowercase().leak()` → `.to_string()` |
 | 7 | ~~CircuitBreaker recovery_secs 硬编码~~ | ~~🟡中~~ | ✅ 已修复：从 DB 配置 `circuit_recovery_secs` 注入到构造函数 |
-| 8 | Release 构建未完成 | 🟡中 | cargo check 通过，`cargo build --release` 超时未完成，需手动构建 |
+| 8 | ~~上游状态码不透传~~ | ~~🔴高~~ | ✅ 已修复：`ProxyError::Upstream` 透传 |
+| 9 | ~~first_token_ms 永远为 0~~ | ~~🔴高~~ | ✅ 已修复：`Instant::now()` 移到 `request.send()` 之前 |
+| 10 | ~~三机制未生效~~ | ~~🔴高~~ | ✅ 已修复：DB migration 补默认值 + 副作用与重试分离 |
+| 11 | Release 构建未完成 | 🟡中 | cargo check 通过，`cargo build --release` 超时未完成，需手动构建 |
 
 ---
 
@@ -434,15 +443,16 @@ api-switch/
 
 | # | 问题 | 根因 | 现象 | 建议 |
 |---|------|------|------|------|
-| 1 | **流式成功日志丢失** | `log_usage` 只在 `Poll::Ready(None)` 调用，客户端提前断开时 stream body 被 drop，`Ready(None)` 不触发，日志不写 | 外部接入正常回复，但日志页看不到成功记录，只有失败记录 | **需修复**：在 `poll_fn` 的 `move` 闭包捕获列表中放一个 `StreamLogGuard`，随 stream body 生命周期 drop。详见下方"流式日志修复方案" |
-| 2 | **上游状态码不透传** | `ProxyError::Internal` 固定返回 HTTP 500，上游 401/429 等全部变成 500 | 客户端无法区分"key 无效"和"服务器错误" | **需修复**：新增 `ProxyError::Upstream { status, message }` 变体，在 `IntoResponse` 中透传状态码。曾实现过 `c341e6d` 但因和 disable_codes 机制耦合被回滚，解耦后应可正常工作 |
-| 3 | **熔断状态不持久化** | `circuit_breakers` 在 `HashMap` 内存中，重启丢失 | 重启后所有已熔断的条目恢复正常，可能再次触发失败 | P3 优先级，非阻断 |
+| 1 | ~~**流式成功日志丢失**~~ | ✅ 已修复：`StreamLogGuard` 在 `poll_fn` 的 `move` 闭包中被捕获，生命周期和 stream body 绑定。`Ready(None)` 写日志，guard drop 是兜底。验证：token 数 2632/73，延迟 2s 正确 |
+| 2 | ~~**上游状态码不透传**~~ | ✅ 已修复：新增 `ProxyError::Upstream { status, message }`，`IntoResponse` 透传上游状态码 |
+| 3 | ~~**三机制（禁用/重试/关键词）未生效**~~ | ✅ 已修复：`process_entry_error` 副作用 + `should_retry` 分离；DB migration 补默认值；禁用≠停止重试 |
+| 4 | ~~**first_token_ms 永远为 0**~~ | ✅ 已修复：`Instant::now()` 移到 `request.send()` 之前，TTFB 真实记录 |
 
 ### 🟡 P1 — 功能增强
 
 | # | 功能 | 说明 |
 |---|------|------|
-| 4 | **配置驱动的错误路由** | `circuit_disable_codes`/`circuit_retry_codes`/`disable_keywords` 三个设置字段 DB 已建好，`parse_status_codes()`/`parse_keywords()` 工具函数已实现（在 `circuit_breaker.rs`），forwarder 中已移除使用。待稳定后重新接入 |
+| 4 | ~~**配置驱动的错误路由**~~ | ✅ 已实现并验证：`circuit_disable_codes`/`circuit_retry_codes`/`disable_keywords` 三机制完整接入，参考 NEW-API `processChannelError` + `shouldRetry` 分离模式 |
 | 5 | **Gemini 原生格式验证** | `gemini.rs` 中原生格式转换函数已实现但未接入 trait |
 | 6 | **Azure deployment 验证** | `azure.rs` 已实现完整路径+api-key+模型列表解析，待有 Azure 资源端到端验证 |
 | 7 | **请求速率限制** | 当前无 RPM/TPM 限流 |
@@ -488,6 +498,58 @@ fn build_streaming_response(...) -> axum::response::Response {
 ---
 
 ## 10. 变更日志
+
+### 2026-04-25 — 核心转发流程对齐 NEW-API（v0.1.5-dev）
+
+**背景**: 对比 NEW-API (`D:\Work\new-api`) 的 `controller/relay.go` + `relay/helper/stream_scanner.go` + `service/channel.go` + `setting/operation_setting/` 完整链路，修复 api-switch 核心转发的多个问题。
+
+**改动文件**: 6 个文件
+
+| # | 改动项 | 说明 |
+|---|--------|------|
+| 1 | **上游状态码透传** | `handlers.rs` 新增 `ProxyError::Upstream { status, message }`，`IntoResponse` 透传上游 HTTP 状态码，不再固定 500 |
+| 2 | **process_entry_error + should_retry 分离** | 参考 NEW-API 的 `processChannelError()` + `shouldRetry()` 模式，副作用（禁用/熔断）和重试决策彻底分离。之前版本混在 forwarder 循环里用 `return Err` 短路整个链路，导致流式日志丢失和状态码不透传 |
+| 3 | **三机制完整实现** | ① 自动禁用状态码（`disable_codes`，默认 401）→ `toggle_entry(false)` 禁用条目 ② 自动重试状态码（`retry_codes`，默认 `100-199,300-399,401-407,409-499,500-503,505-523,525-599`）→ failover ③ 自动禁用关键词（`disable_keywords`，默认 7 条）→ `toggle_entry(false)` |
+| 4 | **禁用≠停止重试** | 关键修复：`disable_codes` 命中只禁用条目（影响未来请求），不阻止当前请求继续 failover。之前版本 `disable_codes` 命中直接 `break`，导致 401 不尝试下一个供应商 |
+| 5 | **first_token_ms 修复** | `Instant::now()` 从 `build_streaming_response` 移到 `forward_single` 的 `request.send()` 之前（作为 `request_start` 参数传入），确保 TTFB = 从发送请求到收到第一个 SSE data chunk 的真实时间。之前放在 HTTP 响应返回后，reqwest 已缓冲 body，elapsed 永远是 0 |
+| 6 | **DB migration 补默认值** | `schema.rs` 的 `create_tables` defaults 数组补上 `circuit_disable_codes`/`circuit_retry_codes`/`disable_keywords`（`INSERT OR IGNORE`，不覆盖用户已修改值）。之前回滚时从 migration 删了这三个 key，`get_settings()` 读不到走空默认 |
+| 7 | **config_dao.rs Default 修复** | `circuit_disable_codes` 默认值从 `""` 改为 `"401"`（与 NEW-API `AutomaticDisableStatusCodeRanges` 一致） |
+| 8 | **SettingsPage UI 恢复** | 熔断卡片下恢复 3 个配置项 UI：自动禁用状态码 Input、自动重试状态码 Input、自动禁用关键词 textarea |
+
+**NEW-API 核心设计参考**:
+- `StreamScannerHandler`: 同步阻塞 `bufio.Scanner` 逐行读 SSE，流结束后才写日志（不存在异步竞态）
+- `SetFirstResponseTime()`: 在 scanner 读取第一个有效 SSE data 时 `time.Now()`
+- `processChannelError()`: 副作用函数（禁用渠道、记录错误日志），不控制流程
+- `shouldRetry()`: 独立重试决策，`ShouldDisableChannel` 和 `shouldRetry` 是两套独立机制
+- `ShouldDisableByStatusCode(401)`: 异步禁用渠道，但 401 在 retry 范围内，当前请求仍 failover
+
+**对比结论 — 核心转发已对齐**:
+
+| NEW-API 机制 | api-switch 状态 | 说明 |
+|-------------|----------------|------|
+| 上游状态码透传 | ✅ `ProxyError::Upstream` | |
+| `processChannelError` 错误日志 | ✅ `log_usage(success=false)` | 每次失败都写 |
+| `PostTextConsumeQuota` 消费日志 | ✅ `Poll::Ready(None)` / `StreamLogGuard::drop` | |
+| `SetFirstResponseTime` TTFB | ✅ `request_start` + `first_token_ms.store` | 从 send() 前开始算 |
+| `shouldRetry` 按配置状态码 | ✅ `retry_codes.contains(&status)` | |
+| `ShouldDisableChannel` 禁用 | ✅ `disable_codes` + `toggle_entry(false)` | |
+| 关键词自动禁用 | ✅ `disable_keywords` + `toggle_entry(false)` | |
+| 504/524 永不重试 | ✅ 硬编码 | |
+| SSE Ping 保活 | ❌ 待实现 P2 | NEW-API: `startPingKeepAlive` goroutine |
+| 客户端断开检测 | ❌ 待实现 P2 | NEW-API: `c.Request.Context().Done()` |
+| 流超时保护 | ❌ 待实现 P2 | NEW-API: `streamingTimeout` ticker |
+| 重试路径记录 | ❌ 待实现 P3 | NEW-API: `重试: 1->2->3` |
+| 流结束原因追踪 | ❌ 待实现 P3 | NEW-API: `StreamEndReason` 枚举 |
+| 熔断持久化 | ❌ 待实现 P3 | |
+
+**编译状态**: `cargo check` 0 errors | `cargo test` 92 passed | `pnpm typecheck` 0 errors
+
+**验证结果**:
+- ✅ 首字时间正常记录（0.6s/0.7s/1.2s）
+- ✅ Claude 401 第一次失败后条目自动禁用，后续请求不再选中
+- ✅ 状态码透传（上游 401 → 客户端收到 401）
+
+---
 
 ### 2026-04-24 — 简化代理错误路由，移除配置驱动机制（v0.1.5-dev）
 
