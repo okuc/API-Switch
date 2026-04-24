@@ -9,6 +9,8 @@ pub struct AppSettings {
     pub access_key_required: bool,
     pub circuit_failure_threshold: i32,
     pub circuit_recovery_secs: i64,
+    pub circuit_disable_codes: String,
+    pub circuit_retry_codes: String,
     pub locale: String,
     pub theme: String,
     pub autostart: bool,
@@ -25,6 +27,9 @@ impl Default for AppSettings {
             circuit_recovery_secs: 60,
             locale: "zh".to_string(),
             theme: "system".to_string(),
+            circuit_disable_codes: "401".to_string(),
+            circuit_retry_codes: "100-199,300-399,401-407,409-499,500-503,505-523,525-599"
+                .to_string(),
             autostart: false,
             start_minimized: false,
         }
@@ -59,6 +64,12 @@ impl Database {
         }
         if let Some(v) = kv.get("circuit_recovery_secs") {
             settings.circuit_recovery_secs = v.parse().unwrap_or(60);
+        }
+        if let Some(v) = kv.get("circuit_disable_codes") {
+            settings.circuit_disable_codes = v.clone();
+        }
+        if let Some(v) = kv.get("circuit_retry_codes") {
+            settings.circuit_retry_codes = v.clone();
         }
         if let Some(v) = kv.get("locale") {
             settings.locale = v.clone();
@@ -101,6 +112,8 @@ impl Database {
                 "circuit_recovery_secs",
                 &updates.circuit_recovery_secs.to_string(),
             ),
+            ("circuit_disable_codes", &updates.circuit_disable_codes),
+            ("circuit_retry_codes", &updates.circuit_retry_codes),
             ("locale", &updates.locale),
             ("theme", &updates.theme),
             ("autostart", if updates.autostart { "1" } else { "0" }),

@@ -197,6 +197,8 @@ export interface AppSettings {
   access_key_required: boolean;
   circuit_failure_threshold: number;
   circuit_recovery_secs: number;
+  circuit_disable_codes: string;
+  circuit_retry_codes: string;
   locale: string;
   theme: "light" | "dark" | "system";
   autostart: boolean;
@@ -209,6 +211,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   access_key_required: false,
   circuit_failure_threshold: 4,
   circuit_recovery_secs: 60,
+  circuit_disable_codes: "401",
+  circuit_retry_codes: "100-199,300-399,401-407,409-499,500-503,505-523,525-599",
   locale: "zh",
   theme: "system",
   autostart: false,
