@@ -410,7 +410,7 @@ fn log_usage(
 ) {
     let log_type = if success { 2 } else { 5 };
     let content = error_message.unwrap_or("");
-    let token_name = access_key.map(|ak| ak.name.as_str()).unwrap_or("anonymous");
+    let token_name = access_key.map(|ak| ak.name.as_str()).unwrap_or("auto");
     let use_time = ((latency_ms as f64) / 1000.0).ceil() as i64;
     let other = format!(
         "{{\"requested_model\":\"{}\",\"resolved_model\":\"{}\",\"first_token_ms\":{},\"status_code\":{},\"success\":{}}}",
@@ -420,7 +420,7 @@ fn log_usage(
     let _ = db.insert_usage_log(
         log_type, content,
         access_key.map(|ak| ak.id.as_str()),
-        access_key.map(|ak| ak.name.as_str()).unwrap_or("anonymous"),
+        access_key.map(|ak| ak.name.as_str()).unwrap_or("auto"),
         token_name, &entry.id, &entry.channel_id,
         entry.channel_name.as_deref().unwrap_or("unknown"),
         &entry.model, requested_model, 0, is_stream,

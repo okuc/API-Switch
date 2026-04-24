@@ -59,7 +59,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
             type INTEGER NOT NULL DEFAULT 2,
             content TEXT DEFAULT '',
             access_key_id TEXT,
-            access_key_name TEXT DEFAULT 'anonymous',
+            access_key_name TEXT DEFAULT 'auto',
             token_name TEXT DEFAULT '',
             api_entry_id TEXT NOT NULL,
             channel_id TEXT NOT NULL,
