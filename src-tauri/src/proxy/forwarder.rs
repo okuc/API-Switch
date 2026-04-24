@@ -2,6 +2,7 @@ use super::circuit_breaker::CircuitBreaker;
 use super::handlers::ProxyError;
 use super::protocol::get_adapter;
 use super::server::ProxyState;
+use crate::database::Database;
 use crate::database::{AccessKey, ApiEntry};
 use axum::body::Body;
 use axum::http::HeaderMap;
@@ -25,13 +26,34 @@ struct ForwardResult {
     status_code: i32,
 }
 
-/// Parse newline-separated keywords into lowercase Vec.
-fn parse_keywords(input: &str) -> Vec<String> {
-    input
-        .lines()
-        .map(|line| line.trim().to_lowercase())
-        .filter(|line| !line.is_empty())
-        .collect()
+/// StreamLogGuard: writes usage log when dropped.
+/// Captured by `poll_fn`'s `move` closure, so it lives as long as the stream body.
+struct StreamLogGuard {
+    logged: Arc<AtomicBool>,
+    db: Arc<Database>,
+    access_key: Option<AccessKey>,
+    entry: ApiEntry,
+    requested_model: String,
+    prompt_tokens: Arc<AtomicI64>,
+    completion_tokens: Arc<AtomicI64>,
+    first_token_ms: Arc<AtomicI64>,
+    status_code: i32,
+    start: Instant,
+}
+
+impl Drop for StreamLogGuard {
+    fn drop(&mut self) {
+        if !self.logged.swap(true, Ordering::Relaxed) {
+            log_usage(
+                &self.db, self.access_key.as_ref(), &self.entry, &self.requested_model,
+                true, self.prompt_tokens.load(Ordering::Relaxed),
+                self.completion_tokens.load(Ordering::Relaxed),
+                self.first_token_ms.load(Ordering::Relaxed),
+                self.start.elapsed().as_millis() as i64,
+                self.status_code, true, None,
+            );
+        }
+    }
 }
 
 /// Forward a request to the resolved entries with retry/failover.
@@ -205,7 +227,23 @@ fn build_streaming_response(
     let mut sse_buffer = String::new();
     let mut upstream_stream = Box::pin(response.bytes_stream());
 
+    // Guard captured by the move closure → lives as long as the stream body
+    let guard = StreamLogGuard {
+        logged: logged.clone(),
+        db: db.clone(),
+        access_key: access_key.clone(),
+        entry: entry.clone(),
+        requested_model: requested_model.clone(),
+        prompt_tokens: prompt_tokens.clone(),
+        completion_tokens: completion_tokens.clone(),
+        first_token_ms: first_token_ms.clone(),
+        status_code,
+        start,
+    };
+
     let body_stream = futures::stream::poll_fn(move |cx| -> Poll<Option<Result<Bytes, std::io::Error>>> {
+        let _ = &guard; // keep guard alive in the closure's capture list
+
         match upstream_stream.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
                 if !seen_first_chunk.swap(true, Ordering::Relaxed) {
