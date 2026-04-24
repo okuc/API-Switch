@@ -105,9 +105,6 @@ pub enum ProxyError {
     #[error("Unauthorized")]
     Unauthorized,
 
-    #[error("Upstream error {status}: {message}")]
-    Upstream { status: u16, message: String },
-
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -127,10 +124,6 @@ impl IntoResponse for ProxyError {
                 StatusCode::BAD_GATEWAY,
                 "All providers failed".to_string(),
             ),
-            ProxyError::Upstream { status, message } => {
-                let code = StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY);
-                (code, message.clone())
-            }
             ProxyError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
         };
 
