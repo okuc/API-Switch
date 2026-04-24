@@ -430,17 +430,29 @@ api-switch/
 
 ## 10. 变更日志
 
-### 2026-04-24 — 系统托盘完善（v0.1.5-dev）
+### 2026-04-24 — v0.1.5-dev 功能完善 & 体验优化
 
-**改动文件**: 2 个文件，+91 行 / -49 行
+**改动文件**: 15 个文件，+400 行 / -450 行
 
 | # | 改动项 | 说明 |
 |---|--------|------|
-| 1 | **托盘事件修复** | 参考 cc-switch 实现：用 `event.id.0` 取 MenuId 内部 String，`match` 分发 `show_main`/`quit`/provider 三类事件 |
-| 2 | **优先级切换完整链路** | 点击 CheckMenuItem → 更新 DB sort_index → `tray.set_menu()` 重建菜单 → `emit("tray-priority-changed")` 通知前端刷新 |
-| 3 | **关闭窗口隐藏到托盘** | 拦截 `WindowEvent::CloseRequested`，`api.prevent_close()` + `window.hide()`，退出仅通过托盘 "Exit" |
-| 4 | **托盘菜单结构优化** | 新增 "Show Main Window" 菜单项，`.show_menu_on_left_click(true)` 左键弹出菜单，`app.exit(0)` 替代 `process::exit(0)` |
-| 5 | **前端事件监听** | `ApiPoolPage` 监听 `tray-priority-changed` 事件，`invalidateQueries(["entries"])` 刷新列表排序 |
+| 1 | **托盘事件修复** | 参考 cc-switch：`event.id.0` 取 MenuId，`match` 分发 `show_main`/`quit`/provider |
+| 2 | **优先级切换链路** | 点击 CheckMenuItem → DB sort_index → `set_menu()` 重建 → `emit()` 通知前端刷新 |
+| 3 | **关闭窗口隐藏到托盘** | 拦截 `CloseRequested`，`prevent_close()` + `hide()`，退出仅托盘 "Exit" |
+| 4 | **启动最小化无闪烁** | `tauri.conf.json` 设 `visible: false`，setup 按需 `show()` |
+| 5 | **双击托盘打开窗口** | `DoubleClick` 事件 + `show_menu_on_left_click(true)` |
+| 6 | **auto-launch 开机自启** | `auto-launch` crate 实际注册 OS 级自启 |
+| 7 | **熔断配置驱动** | `circuit_disable_codes`/`circuit_retry_codes`（逗号分隔范围），`parse_status_codes()` 解析 |
+| 8 | **504/524 永不重试** | 硬编码跳过 |
+| 9 | **自动禁用关键词** | `disable_keywords` 多行文本框，匹配时 `toggle_entry(id, false)` 只禁用当前条目 |
+| 10 | **CircuitBreaker 参数化** | `new(recovery_secs)` + `set_recovery_secs()` 运行时更新 |
+| 11 | **forwarder 错误类型** | `(String, u16)` 替代 `ProxyError`，携带上游状态码驱动决策链 |
+| 12 | **fetch_models_direct** | 新建渠道时直接传 base_url/type/key 获取模型，无需预创建渠道 |
+| 13 | **添加 API 手动输入模型** | 下拉选择改为 Input，新增 display_name 字段 |
+| 14 | **日志页精简** | 移除所有过滤条件，标题栏加 所有/错误 Switch，详情展开行紧跟父行 |
+| 15 | **Dashboard TOP 10** | 饼图只取前 10，不合并 Other |
+| 16 | **UI 文案** | API 池→API 管理，设置→系统设置，anonymous→auto，熔断标签优化 |
+| 17 | **设置修复** | `mutate({ ...s, [key]: value })` 传完整对象，`sync_autostart` 失败不阻断 |
 
 **编译状态**: `cargo check` 0 errors | `pnpm typecheck` 0 errors | 92 tests passed
 
