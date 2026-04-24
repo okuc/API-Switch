@@ -502,7 +502,30 @@ api-switch/
 
 ---
 
-### 2026-04-24 — UI 精简 + 图标替换 + 渠道禁用联动（v0.1.5-dev）
+---
+
+### 2026-04-24 — 熔断机制完善 + 托盘修复 + 自动禁用（v0.1.5-dev）
+
+**改动文件**: 9 个文件，+280 行 / -235 行
+
+| # | 改动项 | 说明 |
+|---|--------|------|
+| 1 | **配置驱动的熔断/重试逻辑** | 新增 `circuit_disable_codes`（自动禁用状态码）和 `circuit_retry_codes`（自动重试状态码），支持逗号分隔的单个状态码和范围 |
+| 2 | **504/524 永不重试** | 硬编码跳过，不受配置影响（网关超时不应浪费配额重试） |
+| 3 | **状态码决策链** | 关键词匹配 → 504/524 → disable_codes → 5xx 触发熔断 → retry_codes 检查 → failover 或立即返回 |
+| 4 | **自动禁用关键词** | 新增 `disable_keywords` 设置（多行文本框），上游错误包含关键词时自动禁用整个渠道（channel + api_entries enabled=0） |
+| 5 | **默认关键词** | credit balance too low / org disabled / quota exceeded / permission denied / invalid security token / operation not allowed / account not authorized |
+| 6 | **CircuitBreaker 参数化** | `new(recovery_secs)` 接受恢复时间参数，`set_recovery_secs()` 支持运行时更新 |
+| 7 | **forwarder 类型修复** | `forward_single` 返回 `(String, u16)` 替代 `ProxyError`，携带上游状态码 |
+| 8 | **Dashboard 分布图 TOP 10** | 饼图按 count 降序取前 10，其余合并为 "Other" |
+| 9 | **托盘设置开关修复** | 前端 `mutate` 传完整对象避免重置其他设置；`auto-launch` crate 实际注册系统开机自启 |
+| 10 | **启动最小化无闪烁** | `tauri.conf.json` 设 `visible: false`，setup 中按需 `show()` |
+| 11 | **双击托盘打开窗口** | `TrayIconEvent::DoubleClick` 匹配双击事件 |
+| 12 | **UI 文案更新** | API 池 → API 管理，设置 → 系统设置，熔断标签改为"连续失败次数"/"恢复等待时间" |
+
+**编译状态**: `cargo check` 0 errors | `pnpm typecheck` 0 errors | 92 tests passed
+
+---
 
 ### 2026-04-23 — 协议适配模块化重构（v0.1.2-dev）
 
