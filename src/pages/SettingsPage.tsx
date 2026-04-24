@@ -123,7 +123,7 @@ export function SettingsPage() {
             <Input
               value={s.circuit_disable_codes}
               onChange={(e) => update("circuit_disable_codes", e.target.value)}
-              placeholder="401"
+              placeholder="401,403"
             />
           </div>
           <div className="space-y-1.5">
