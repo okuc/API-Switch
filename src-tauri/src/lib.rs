@@ -64,8 +64,13 @@ pub fn run() {
                 .icon(app.default_window_icon().cloned().unwrap())
                 .menu(&tray_menu)
                 .show_menu_on_left_click(true)
-                .on_tray_icon_event(|_tray, event| match event {
-                    tauri::tray::TrayIconEvent::Click { .. } => {}
+                .on_tray_icon_event(|tray, event| match event {
+                    tauri::tray::TrayIconEvent::DoubleClick { .. } => {
+                        if let Some(window) = tray.app_handle().get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
                     _ => {}
                 })
                 .on_menu_event(move |app, event| {
