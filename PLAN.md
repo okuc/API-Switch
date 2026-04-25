@@ -309,7 +309,7 @@ ChannelPage: React Component → TanStack Query (useQuery/useMutation)
 - [ ] **SSE Ping 保活**: 长思考模型（o1/o3）可能在 30-60s 后因反向代理超时断开。参考 NEW-API `startPingKeepAlive` goroutine，可配置间隔发送 `: PING\n\n`
 - [ ] **流超时保护**: 当前无流式超时，上游挂死会无限等待。参考 NEW-API `streamingTimeout` ticker（默认 300s）
 - [ ] **客户端断开检测**: 客户端断开后仍等待上游完成。参考 NEW-API `c.Request.Context().Done()` 主动检测
-- [ ] **实时日志推送**: 当前日志靠轮询，可改为 Tauri Event 实时推送
+- [x] **实时日志推送**: 后端 `log_usage()` 写 DB 后通过 `emit("new-usage-log")` 推送事件，前端 `LogPage` 监听并自动刷新
 - [ ] **请求/响应 Mock**: 前端开发时缺少 Mock 数据，开发体验不佳
 - [ ] **错误提示优化**: 前端统一的 Toast 错误提示
 - [ ] **响应式布局**: 当前 min 800×600，小屏适配
@@ -475,6 +475,22 @@ api-switch/
 | 7 | **系统语言检测** | i18n 初始化按系统语言匹配：`zh*` 用中文，其余英文；用户选择后按用户偏好 |
 | 8 | **侧边栏 Star 链接** | 导航下方放置 `star.jpg`，点击跳转 GitHub |
 | 9 | **i18n 补充** | 中英文新增 `guide.*`、`common.doNotShowAgain` 翻译 |
+
+---
+
+### 2026-04-25 — v0.1.0 后续完善
+
+| # | 改动项 | 说明 |
+|---|--------|------|
+| 1 | **主题切换** | `App.tsx` 监听 `settings.theme` 变化，在 `<html>` 上加/移除 `dark` class，启动时从 DB 应用；默认浅色主题 |
+| 2 | **隐藏滚动条** | `index.css` 全局 `scrollbar-width: none` + `::-webkit-scrollbar { display: none }`，保留滚动功能 |
+| 3 | **拖拽滚动** | `useDragScroll` hook，空白区域按住拖动滚动容器，按钮/开关/链接不受影响；侧边栏和主内容区都支持 |
+| 4 | **Custom API 类型优先** | `API_TYPE_OPTIONS` 数组中 Custom 排第一位，使用量最大 |
+| 5 | **Dashboard 卡片文案** | 去掉"今日"，改为"请求数/Tokens"等，因为是 24 小时统计 |
+| 6 | **更新检查** | 启动后查 GitHub Releases 最新版，有新版顶部显示提示条（不自动消失）。关闭引导后检查一次，无引导则直接检查 |
+| 7 | **实时日志推送** | `log_usage()` 写 DB 后 `emit("new-usage-log")`，`LogPage` 监听并自动刷新 |
+| 8 | **README 更新** | 中英文 README 添加创建背景、免责声明；API Key 明文存储为设计决策 |
+| 9 | **PLAN.md 清理** | 已知问题全部标记已解决，待开发列表整理，章节编号修正 |
 
 ---
 
