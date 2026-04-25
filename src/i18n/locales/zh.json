@@ -246,6 +246,7 @@
     "error": "错误",
     "success": "成功",
     "noData": "暂无数据",
+    "action": "操作",
     "doNotShowAgain": "不再提示"
   },
   "update": {

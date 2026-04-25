@@ -49,8 +49,8 @@ type ChannelFormState = {
 
 const defaultChannelForm = (): ChannelFormState => ({
   name: "",
-  api_type: "openai",
-  base_url: API_TYPE_DEFAULT_URLS.openai,
+  api_type: "custom",
+  base_url: API_TYPE_DEFAULT_URLS.custom,
   api_key: "",
   notes: "",
   enabled: true,

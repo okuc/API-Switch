@@ -80,64 +80,54 @@ export function TokenPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50 text-left text-muted-foreground">
+                <th className="px-4 py-2 font-medium w-16">{t("token.enabled")}</th>
                 <th className="px-4 py-2 font-medium">{t("token.name")}</th>
                 <th className="px-4 py-2 font-medium">{t("token.key")}</th>
-                <th className="px-4 py-2 font-medium">{t("token.status")}</th>
                 <th className="px-4 py-2 font-medium">{t("token.created")}</th>
-                <th className="px-4 py-2 font-medium w-24">{t("common.action")}</th>
+                <th className="px-4 py-2 font-medium w-16">{t("common.action")}</th>
               </tr>
             </thead>
             <tbody>
               {keys.map((key) => (
                 <tr key={key.id} className="border-b last:border-b-0 hover:bg-muted/30">
+                  <td className="px-4 py-3">
+                    <Switch
+                      checked={key.enabled}
+                      onCheckedChange={(checked) =>
+                        toggleMutation.mutate({ id: key.id, enabled: checked })
+                      }
+                    />
+                  </td>
                   <td className="px-4 py-3 font-medium">{key.name}</td>
                   <td className="px-4 py-3">
-                    <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">
-                      {key.key.slice(0, 8)}...{key.key.slice(-4)}
-                    </code>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-                      onClick={() => copyKey(key.key, key.id)}
-                    >
-                      {copiedId === key.id ? (
-                        <Check className="h-3.5 w-3.5 text-green-600" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" />
-                      )}
-                    </Button>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs">{formatDate(key.created_at)}</td>
-                  <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
+                      <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">
+                        {key.key.slice(0, 8)}...{key.key.slice(-4)}
+                      </code>
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-7 w-7"
+                        className="h-5 w-5 shrink-0 text-muted-foreground"
                         onClick={() => copyKey(key.key, key.id)}
                       >
                         {copiedId === key.id ? (
-                          <Check className="h-3.5 w-3.5 text-green-600" />
+                          <Check className="h-3 w-3 text-green-600" />
                         ) : (
-                          <Copy className="h-3.5 w-3.5" />
+                          <Copy className="h-3 w-3" />
                         )}
                       </Button>
-                      <Switch
-                        checked={key.enabled}
-                        onCheckedChange={(checked) =>
-                          toggleMutation.mutate({ id: key.id, enabled: checked })
-                        }
-                      />
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => deleteMutation.mutate(key.id)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                      </Button>
                     </div>
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground text-xs">{formatDate(key.created_at)}</td>
+                  <td className="px-4 py-3">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => deleteMutation.mutate(key.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                    </Button>
                   </td>
                 </tr>
               ))}
