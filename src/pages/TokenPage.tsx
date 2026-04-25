@@ -168,7 +168,11 @@ export function TokenPage() {
                   size="icon"
                   onClick={() => copyKey(createdKey.key, createdKey.id)}
                 >
-                  <Copy className="h-4 w-4" />
+                  {copiedId === createdKey.id ? (
+                    <Check className="h-4 w-4 text-green-600" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
                 </Button>
               </div>
             </div>
