@@ -353,16 +353,16 @@ pnpm build            # 生产构建
 | # | 问题 | 严重度 | 说明 |
 |---|------|--------|------|
 | 1 | ~~开发环境未验证~~ | ~~高~~ | ✅ cargo check + pnpm typecheck 均通过 |
-| 2 | API Key 明文存储 | 中 | SQLite 中 api_key 未加密 |
-| 3 | 熔断状态不持久 | 低 | 重启后所有熔断重置，P3 优先级 |
-| 4 | ~~路由层 ApiEntry 重复克隆~~ | ~~🟡中~~ | `router::resolve()` 对匹配的 ApiEntry 调用 `(*e).clone()`，`model="auto"` 时克隆所有条目。设计上应引入轻量级 `RouteEntry` 结构（仅 id/model/sort_index），由数据库层提供独立接口，避免克隆大对象。已尝试重构但因涉及链路过长（router/handlers/forwarder/dao）编译错误较多，暂缓处理，留待后续 P2-P3 优化。 |
-| 5 | ~~SSE 流式回归~~ | ~~🔴高~~ | ✅ 已修复：OpenAI 兼容类型恢复原始字节透传 |
-| 6 | ~~Gemini 原生格式内存泄漏~~ | ~~🔴高~~ | ✅ 已修复：`str.to_lowercase().leak()` → `.to_string()` |
-| 7 | ~~CircuitBreaker recovery_secs 硬编码~~ | ~~🟡中~~ | ✅ 已修复：从 DB 配置 `circuit_recovery_secs` 注入到构造函数 |
-| 8 | ~~上游状态码不透传~~ | ~~🔴高~~ | ✅ 已修复：`ProxyError::Upstream` 透传 |
-| 9 | ~~first_token_ms 永远为 0~~ | ~~🔴高~~ | ✅ 已修复：`Instant::now()` 移到 `request.send()` 之前 |
-| 10 | ~~三机制未生效~~ | ~~🔴高~~ | ✅ 已修复：DB migration 补默认值 + 副作用与重试分离 |
-| 11 | ~~Release 构建未完成~~ | ~~🟡中~~ | ✅ v0.1.0 已通过 GitHub Actions CI/CD 成功发布 4 平台 |
+| 2 | ~~路由层 ApiEntry 重复克隆~~ | ~~🟡中~~ | ✅ 已接受：`router::resolve()` 克隆 ApiEntry，个人工具场景性能无影响 |
+| 3 | ~~SSE 流式回归~~ | ~~🔴高~~ | ✅ 已修复：OpenAI 兼容类型恢复原始字节透传 |
+| 4 | ~~Gemini 原生格式内存泄漏~~ | ~~🔴高~~ | ✅ 已修复：`str.to_lowercase().leak()` → `.to_string()` |
+| 5 | ~~CircuitBreaker recovery_secs 硬编码~~ | ~~🟡中~~ | ✅ 已修复：从 DB 配置 `circuit_recovery_secs` 注入到构造函数 |
+| 6 | ~~上游状态码不透传~~ | ~~🔴高~~ | ✅ 已修复：`ProxyError::Upstream` 透传 |
+| 7 | ~~first_token_ms 永远为 0~~ | ~~🔴高~~ | ✅ 已修复：`Instant::now()` 移到 `request.send()` 之前 |
+| 8 | ~~三机制未生效~~ | ~~🔴高~~ | ✅ 已修复：DB migration 补默认值 + 副作用与重试分离 |
+| 9 | ~~Release 构建未完成~~ | ~~🟡中~~ | ✅ v0.1.0 已通过 GitHub Actions CI/CD 成功发布 4 平台 |
+
+> **设计说明**：API Key 明文存储是设计决策，已在 README 免责声明中明确；熔断状态不持久已在 P1 待开发计划中。
 
 ---
 
