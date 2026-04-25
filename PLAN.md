@@ -295,7 +295,6 @@ ChannelPage: React Component → TanStack Query (useQuery/useMutation)
 - ~~**cargo-tauri CLI 安装**: `@tauri-apps/cli` 已在 devDependencies，`pnpm tauri dev` 可直接使用~~
 
 ### P1 — 重点需求
-- [ ] **Web 管理界面**: 在 axum 代理服务器中托管前端 React 应用，支持通过浏览器 `http://ip:9090` 访问管理界面（渠道/API/设置），无需安装桌面端，适配服务器/NAS 部署场景
 - [ ] **CLI 自动配置**: 启动代理后自动配置系统环境变量（如 `OPENAI_API_BASE`、`OPENAI_API_KEY`），让 OpenAI CLI、curl 等命令行工具直接使用 API Switch 转发，无需手动配置每个工具
 - [ ] **自动更新**: Tauri updater 集成
 - [ ] **熔断状态持久化**: 当前内存态，重启后丢失所有熔断历史
@@ -497,6 +496,9 @@ api-switch/
 | 6 | **DB migration 补默认值** | `schema.rs` 的 `create_tables` defaults 数组补上 `circuit_disable_codes`/`circuit_retry_codes`/`disable_keywords`（`INSERT OR IGNORE`，不覆盖用户已修改值）。之前回滚时从 migration 删了这三个 key，`get_settings()` 读不到走空默认 |
 | 7 | **config_dao.rs Default 修复** | `circuit_disable_codes` 默认值从 `""` 改为 `"401"`（与 NEW-API `AutomaticDisableStatusCodeRanges` 一致） |
 | 8 | **SettingsPage UI 恢复** | 熔断卡片下恢复 3 个配置项 UI：自动禁用状态码 Input、自动重试状态码 Input、自动禁用关键词 textarea |
+| 9 | **更新检查** | 启动后检查一次 GitHub Releases，有新版在顶部显示提示条。逻辑：无快速上手弹窗→直接检查；有弹窗→关闭后检查一次。提示条不自动消失，用户手动关闭。网络失败静默忽略 |
+
+> **待验证**：更新检查功能在本地开发环境无法测试（当前版本 = GitHub 最新版本），需要发布新版本后验证。
 
 **NEW-API 核心设计参考**:
 - `StreamScannerHandler`: 同步阻塞 `bufio.Scanner` 逐行读 SSE，流结束后才写日志（不存在异步竞态）
