@@ -39,20 +39,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install frontend dependencies
-        run: pnpm install
-
-      - name: Build frontend
-        run: pnpm build:renderer
-
-      - name: Setup Rust stable
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -68,9 +57,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      - name: Install pnpm and dependencies
+        run: |
+          npm install -g pnpm
+          pnpm install --frozen-lockfile
+          pnpm remove sharp png-to-ico
+
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-        working-directory: src-tauri
+        run: pnpm tauri build --target ${{ matrix.target }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
