@@ -202,6 +202,11 @@
       "stopped": "已停止",
       "address": "监听地址"
     },
+    "security": {
+      "title": "安全设置",
+      "forceKey": "强制验证访问密钥",
+      "forceKeyDesc": "启用后，所有 API 请求必须携带有效的 Access Key，否则返回 401"
+    },
     "circuit": {
       "title": "熔断机制",
       "threshold": "连续失败次数",

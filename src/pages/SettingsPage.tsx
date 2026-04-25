@@ -92,6 +92,25 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* Security */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="text-base">{t("settings.security.title")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>{t("settings.security.forceKey")}</Label>
+              <p className="text-xs text-muted-foreground">{t("settings.security.forceKeyDesc")}</p>
+            </div>
+            <Switch
+              checked={s.access_key_required}
+              onCheckedChange={(v) => update("access_key_required", v)}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Circuit Breaker */}
       <Card className="mb-6">
         <CardHeader>
