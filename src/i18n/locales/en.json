@@ -100,6 +100,7 @@
   },
   "log": {
     "title": "Usage Logs",
+    "all": "All",
     "time": "Time",
     "type": "Type",
     "consume": "Consume",
