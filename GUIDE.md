@@ -33,7 +33,7 @@ API Key 留空即可（未开启访问密钥验证时）。
 
 ---
 
-## CODING PLAY / API-Switch 推荐配置
+## CODING PLAN / API-Switch 推荐配置
 
 ### MiniMax（硅基流动）
 
