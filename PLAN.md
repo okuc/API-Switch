@@ -569,6 +569,37 @@ if let Ok(new_menu) = build_tray_menu(&app) {
 
 ---
 
+### 2026-04-26 — 个人版模型冷却机制（v0.2.0-dev）
+
+**改动文件**: 9 个文件（`schema.rs`、`api_entry_dao.rs`、`config_dao.rs`、`forwarder.rs`、`circuit_breaker.rs`、`router.rs`、`types.ts`、`SettingsPage.tsx`、`ApiPoolPage.tsx`）
+
+**策略调整**: 放弃 NEW-API 风格的复杂状态码/关键词路由策略，改为个人版稳定优先的“模型冷却”机制。
+
+| # | 改动项 | 说明 |
+|---|--------|------|
+| 1 | **数据库兼容检查** | `api_entries` 新增 `cooldown_until INTEGER` 字段；启动时通过 `ensure_api_entry_columns()` 自动检查并 `ALTER TABLE` 补字段，兼容已发布用户数据库 |
+| 2 | **正式路由过滤冷却模型** | `get_enabled_entries_for_routing()` 仅返回 `enabled=1`、渠道启用且 `cooldown_until IS NULL OR cooldown_until <= now` 的条目；AUTO 和显式模型请求都会跳过冷却中的模型 |
+| 3 | **失败统一冷却** | 任意上游非正常（非 2xx、连接失败、响应解析失败、流式 upstream error、流式 idle timeout）都会设置 `cooldown_until = now + circuit_recovery_secs`，默认 300 秒，并继续 failover 下一个模型 |
+| 4 | **成功清除冷却** | 非流式成功、流式正常结束后清除当前 entry 的 `cooldown_until`，同时保留内存 CircuitBreaker 的 success 反馈 |
+| 5 | **用户开关不被系统修改** | 移除失败时 `toggle_entry(false)` 的自动禁用副作用；`enabled=false` 只代表用户手动禁用，系统只写冷却时间 |
+| 6 | **取消复杂策略配置** | 转发路径不再读取/使用自动禁用状态码、自动重试状态码、自动禁用关键词；删除 504/524 不重试特判，所有上游失败都继续尝试下一个 entry |
+| 7 | **默认冷却参数** | 默认连续失败次数改为 1，恢复等待时间改为 300 秒；启动迁移仅将旧默认值 `4/60` 改为 `1/300`，保留用户自定义值 |
+| 8 | **设置页精简** | Settings 熔断卡片只保留连续失败次数和恢复等待时间，移除自动禁用状态码、自动重试状态码、自动禁用关键词输入项 |
+| 9 | **API 池状态点** | 模型列表状态点优先显示冷却状态：`cooldown_until > now` 为红点，不管是否开启；未冷却且未开启为灰点，已开启且未冷却为绿点 |
+
+**当前语义**:
+
+```text
+正常请求 → 直接返回，并清除该模型 cooldown_until
+不正常请求 → 写失败日志，设置 cooldown_until = now + 300s，继续 failover
+正式路由 → 只选择 enabled 且未冷却的模型
+用户禁用 → 仍由 enabled=false 表达，系统不会自动改 enabled
+```
+
+**编译状态**: `cargo check` 0 errors, 19 warnings（均为已有 unused/dead_code 为主）, `pnpm typecheck` 0 errors
+
+---
+
 ### 2026-04-25 — UI 体验优化（v0.2.0-dev）
 
 **改动文件**: 5 个文件

@@ -56,6 +56,15 @@ function StatusDot({ state }: { state: string }) {
   );
 }
 
+function getEntryStatus(entry: ApiEntry) {
+  const now = Math.floor(Date.now() / 1000);
+  if (entry.cooldown_until && entry.cooldown_until > now) return "open";
+
+  if (!entry.enabled) return "disabled";
+
+  return "closed";
+}
+
 function SortablePoolEntryCard({
   entry,
   onTest,
@@ -102,7 +111,7 @@ function SortablePoolEntryCard({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <StatusDot state={entry.enabled ? "closed" : "disabled"} />
+            <StatusDot state={getEntryStatus(entry)} />
             <span className="font-medium truncate">{entry.display_name}</span>
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">

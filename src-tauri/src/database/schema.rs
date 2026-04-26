@@ -31,6 +31,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
             display_name TEXT NOT NULL,
             sort_index INTEGER DEFAULT 0,
             enabled INTEGER DEFAULT 1,
+            cooldown_until INTEGER,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
@@ -86,6 +87,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
     )
     .map_err(|e| AppError::Database(e.to_string()))?;
 
+    ensure_api_entry_columns(conn)?;
     ensure_usage_log_columns(conn)?;
 
     // Indexes
@@ -128,8 +130,8 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
         ("proxy_enabled", "1"),
         ("listen_port", "9090"),
         ("access_key_required", "0"),
-        ("circuit_failure_threshold", "4"),
-        ("circuit_recovery_secs", "60"),
+        ("circuit_failure_threshold", "1"),
+        ("circuit_recovery_secs", "300"),
         ("circuit_disable_codes", "401"),
         ("circuit_retry_codes", "100-199,300-399,401-407,409-499,500-503,505-523,525-599"),
         ("disable_keywords", "Your credit balance is too low\nThis organization has been disabled.\nYou exceeded your current quota\nPermission denied\nThe security token included in the request is invalid\nOperation not allowed\nYour account is not authorized"),
@@ -146,6 +148,24 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
         .map_err(|e| AppError::Database(e.to_string()))?;
     }
 
+    // Migrate old default circuit values to the personal-version cooldown defaults.
+    // Preserve explicitly customized values by only rewriting the previous defaults.
+    conn.execute(
+        "UPDATE config SET value = '1' WHERE key = 'circuit_failure_threshold' AND value = '4'",
+        [],
+    )
+    .map_err(|e| AppError::Database(e.to_string()))?;
+    conn.execute(
+        "UPDATE config SET value = '300' WHERE key = 'circuit_recovery_secs' AND value = '60'",
+        [],
+    )
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    Ok(())
+}
+
+fn ensure_api_entry_columns(conn: &Connection) -> Result<(), AppError> {
+    ensure_column(conn, "api_entries", "cooldown_until", "INTEGER")?;
     Ok(())
 }
 

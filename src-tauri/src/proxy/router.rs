@@ -79,6 +79,7 @@ mod tests {
             display_name: model.to_string(),
             sort_index,
             enabled,
+            cooldown_until: None,
             circuit_state: "closed".to_string(),
             created_at: 0,
             updated_at: 0,

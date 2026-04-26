@@ -10,6 +10,8 @@ pub struct ApiEntry {
     pub display_name: String,
     pub sort_index: i32,
     pub enabled: bool,
+    #[serde(default)]
+    pub cooldown_until: Option<i64>,
     #[serde(default = "default_circuit_state")]
     pub circuit_state: String,
     pub created_at: i64,
@@ -33,7 +35,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
             "SELECT e.id, e.channel_id, e.model, e.display_name, e.sort_index, e.enabled,
-                    e.created_at, e.updated_at, c.name, c.api_type
+                    e.cooldown_until, e.created_at, e.updated_at, c.name, c.api_type
              FROM api_entries e
              LEFT JOIN channels c ON e.channel_id = c.id
              ORDER BY e.sort_index, e.created_at",
@@ -49,11 +51,12 @@ impl Database {
                     display_name: row.get(3)?,
                     sort_index: row.get(4)?,
                     enabled: enabled != 0,
+                    cooldown_until: row.get(6).ok(),
                     circuit_state: "closed".to_string(),
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                    channel_name: row.get(8).ok(),
-                    channel_api_type: row.get(9).ok(),
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                    channel_name: row.get(9).ok(),
+                    channel_api_type: row.get(10).ok(),
                     owned_by: None,
                 })
             })?
@@ -87,6 +90,7 @@ impl Database {
             display_name: display_name.to_string(),
             sort_index,
             enabled: true,
+            cooldown_until: None,
             circuit_state: "closed".to_string(),
             created_at: now,
             updated_at: now,
@@ -125,6 +129,16 @@ impl Database {
         conn.execute(
             "UPDATE api_entries SET enabled=?1, updated_at=?2 WHERE id=?3",
             rusqlite::params![enabled as i32, now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_entry_cooldown(&self, id: &str, cooldown_until: Option<i64>) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE api_entries SET cooldown_until=?1, updated_at=?2 WHERE id=?3",
+            rusqlite::params![cooldown_until, now, id],
         )?;
         Ok(())
     }
@@ -188,7 +202,7 @@ impl Database {
     ) -> Result<Option<ApiEntry>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
-            "SELECT id, channel_id, model, display_name, sort_index, enabled, created_at, updated_at
+            "SELECT id, channel_id, model, display_name, sort_index, enabled, cooldown_until, created_at, updated_at
              FROM api_entries WHERE channel_id = ?1 AND model = ?2"
         )?;
 
@@ -201,9 +215,10 @@ impl Database {
                 display_name: row.get(3)?,
                 sort_index: row.get(4)?,
                 enabled: enabled != 0,
+                cooldown_until: row.get(6).ok(),
                 circuit_state: "closed".to_string(),
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
                 channel_name: None,
                 channel_api_type: None,
                 owned_by: None,
@@ -275,10 +290,11 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
             "SELECT e.id, e.channel_id, e.model, e.display_name, e.sort_index, e.enabled,
-                    e.created_at, e.updated_at, c.name, c.api_type
+                    e.cooldown_until, e.created_at, e.updated_at, c.name, c.api_type
              FROM api_entries e
              LEFT JOIN channels c ON e.channel_id = c.id
              WHERE e.enabled = 1 AND c.enabled = 1
+               AND (e.cooldown_until IS NULL OR e.cooldown_until <= strftime('%s','now'))
               ORDER BY e.sort_index, e.created_at",
         )?;
 
@@ -286,7 +302,7 @@ impl Database {
             .query_map([], |row| {
                 let enabled: i32 = row.get(5)?;
                 let owned_by =
-                    row.get::<_, String>(9)
+                    row.get::<_, String>(10)
                         .ok()
                         .and_then(|api_type| match api_type.as_str() {
                             "openai" | "anthropic" => Some("openai".to_string()),
@@ -303,11 +319,12 @@ impl Database {
                     display_name: row.get(3)?,
                     sort_index: row.get(4)?,
                     enabled: enabled != 0,
+                    cooldown_until: row.get(6).ok(),
                     circuit_state: "closed".to_string(),
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                    channel_name: row.get(8).ok(),
-                    channel_api_type: row.get(9).ok(),
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                    channel_name: row.get(9).ok(),
+                    channel_api_type: row.get(10).ok(),
                     owned_by,
                 })
             })?
@@ -322,7 +339,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
             "SELECT e.id, e.channel_id, e.model, e.display_name, e.sort_index, e.enabled,
-                    e.created_at, e.updated_at, c.name, c.api_type
+                    e.cooldown_until, e.created_at, e.updated_at, c.name, c.api_type
              FROM api_entries e
              LEFT JOIN channels c ON e.channel_id = c.id
               ORDER BY e.sort_index, e.created_at",
@@ -332,7 +349,7 @@ impl Database {
             .query_map([], |row| {
                 let enabled: i32 = row.get(5)?;
                 let owned_by =
-                    row.get::<_, String>(9)
+                    row.get::<_, String>(10)
                         .ok()
                         .and_then(|api_type| match api_type.as_str() {
                             "openai" | "anthropic" => Some("openai".to_string()),
@@ -349,11 +366,12 @@ impl Database {
                     display_name: row.get(3)?,
                     sort_index: row.get(4)?,
                     enabled: enabled != 0,
+                    cooldown_until: row.get(6).ok(),
                     circuit_state: "closed".to_string(),
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                    channel_name: row.get(8).ok(),
-                    channel_api_type: row.get(9).ok(),
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                    channel_name: row.get(9).ok(),
+                    channel_api_type: row.get(10).ok(),
                     owned_by,
                 })
             })?

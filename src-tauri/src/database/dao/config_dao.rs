@@ -25,8 +25,8 @@ impl Default for AppSettings {
             proxy_enabled: true,
             listen_port: 9090,
             access_key_required: false,
-            circuit_failure_threshold: 4,
-            circuit_recovery_secs: 60,
+            circuit_failure_threshold: 1,
+            circuit_recovery_secs: 300,
             locale: "zh".to_string(),
             theme: "light".to_string(),
             circuit_disable_codes: "401".to_string(),
@@ -63,10 +63,10 @@ impl Database {
             settings.access_key_required = v == "1";
         }
         if let Some(v) = kv.get("circuit_failure_threshold") {
-            settings.circuit_failure_threshold = v.parse().unwrap_or(4);
+            settings.circuit_failure_threshold = v.parse().unwrap_or(1);
         }
         if let Some(v) = kv.get("circuit_recovery_secs") {
-            settings.circuit_recovery_secs = v.parse().unwrap_or(60);
+            settings.circuit_recovery_secs = v.parse().unwrap_or(300);
         }
         if let Some(v) = kv.get("circuit_disable_codes") {
             settings.circuit_disable_codes = v.clone();

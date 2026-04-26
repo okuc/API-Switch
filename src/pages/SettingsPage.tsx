@@ -11,7 +11,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { getSettings, updateSettings, getProxyStatus, startProxy, stopProxy } from "@/lib/api";
 import { DEFAULT_SETTINGS } from "@/types";
 
@@ -123,7 +122,7 @@ export function SettingsPage() {
               type="number"
               className="w-32"
               value={s.circuit_failure_threshold}
-              onChange={(e) => update("circuit_failure_threshold", parseInt(e.target.value) || 4)}
+              onChange={(e) => update("circuit_failure_threshold", parseInt(e.target.value) || 1)}
             />
           </div>
           <div className="flex items-center justify-between">
@@ -132,37 +131,7 @@ export function SettingsPage() {
               type="number"
               className="w-32"
               value={s.circuit_recovery_secs}
-              onChange={(e) => update("circuit_recovery_secs", parseInt(e.target.value) || 60)}
-            />
-          </div>
-          <Separator />
-          <div className="space-y-1.5">
-            <Label>{t("settings.circuit.disableCodes")}</Label>
-            <p className="text-xs text-muted-foreground">{t("settings.circuit.disableDesc")}</p>
-            <Input
-              value={s.circuit_disable_codes}
-              onChange={(e) => update("circuit_disable_codes", e.target.value)}
-              placeholder="401,403"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>{t("settings.circuit.retryCodes")}</Label>
-            <p className="text-xs text-muted-foreground">{t("settings.circuit.retryDesc")}</p>
-            <Input
-              value={s.circuit_retry_codes}
-              onChange={(e) => update("circuit_retry_codes", e.target.value)}
-              placeholder="100-199,300-399,401-407,409-499,500-503,505-523,525-599"
-            />
-          </div>
-          <Separator />
-          <div className="space-y-1.5">
-            <Label>{t("settings.circuit.disableKeywords")}</Label>
-            <p className="text-xs text-muted-foreground">{t("settings.circuit.disableKeywordsDesc")}</p>
-            <textarea
-              value={s.disable_keywords}
-              onChange={(e) => update("disable_keywords", e.target.value)}
-              rows={6}
-              className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              onChange={(e) => update("circuit_recovery_secs", parseInt(e.target.value) || 300)}
             />
           </div>
         </CardContent>

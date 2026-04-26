@@ -1,4 +1,4 @@
-use super::circuit_breaker::{parse_status_codes, CircuitBreaker};
+use super::circuit_breaker::CircuitBreaker;
 use super::handlers::ProxyError;
 use super::protocol::get_adapter;
 use super::server::ProxyState;
@@ -97,15 +97,6 @@ fn attempt_path_with_current(
     attempt_path_json(&attempts)
 }
 
-/// Parse newline-separated keywords into lowercase Vec.
-fn parse_keywords(input: &str) -> Vec<String> {
-    input
-        .lines()
-        .map(|line| line.trim().to_lowercase())
-        .filter(|line| !line.is_empty())
-        .collect()
-}
-
 /// Forward error with upstream status code (0 = connection failure).
 type ForwardError = (String, u16);
 
@@ -160,10 +151,10 @@ impl Drop for StreamLogGuard {
 
 /// Forward a request to the resolved entries with retry/failover.
 ///
-/// Design follows NEW-API's pattern:
-/// 1. Always write usage log for every attempt
-/// 2. process_entry_error() — side effects only (disable entry, record circuit)
-/// 3. should_retry() — independent decision whether to try next entry
+/// Personal-version cooldown strategy:
+/// 1. Any upstream failure is considered abnormal for this model entry.
+/// 2. Failed entries are cooled down for `circuit_recovery_secs` seconds and skipped by routing.
+/// 3. User enabled/disabled state is never changed automatically.
 pub async fn forward_with_retry(
     state: &ProxyState,
     entries: &[ApiEntry],
@@ -173,21 +164,6 @@ pub async fn forward_with_retry(
     access_key: Option<&AccessKey>,
     is_stream: bool,
 ) -> Result<axum::response::Response, ProxyError> {
-    // Read circuit config once
-    let settings = state.db.get_settings().ok();
-    let disable_codes = settings
-        .as_ref()
-        .map(|s| parse_status_codes(&s.circuit_disable_codes))
-        .unwrap_or_default();
-    let retry_codes = settings
-        .as_ref()
-        .map(|s| parse_status_codes(&s.circuit_retry_codes))
-        .unwrap_or_default();
-    let disable_keywords = settings
-        .as_ref()
-        .map(|s| parse_keywords(&s.disable_keywords))
-        .unwrap_or_default();
-
     let mut last_error: Option<(String, u16)> = None;
     let mut attempts: Vec<AttemptInfo> = Vec::new();
 
@@ -236,17 +212,8 @@ pub async fn forward_with_retry(
                     Some(attempt_path.as_str()), None,
                 );
 
-                // Step 2: process_entry_error — side effects only
-                let action = process_entry_error(
-                    state, entry, &e, status,
-                    &disable_codes, &retry_codes, &disable_keywords,
-                ).await;
-
-                // Step 3: should_retry — independent decision
-                if !action.should_retry {
-                    last_error = Some((e, status));
-                    break;
-                }
+                // Step 2: mark this entry as abnormal and cool it down.
+                cool_down_entry(state, entry).await;
 
                 last_error = Some((e, status));
                 continue;
@@ -263,83 +230,6 @@ pub async fn forward_with_retry(
             }
         })
         .unwrap_or(ProxyError::AllProvidersFailed))
-}
-
-/// Result of process_entry_error: tells the caller whether to retry or stop.
-struct ErrorAction {
-    should_retry: bool,
-}
-
-/// Process entry error — side effects only (NEW-API pattern: processChannelError).
-///
-/// Three independent mechanisms, separated by design:
-///
-/// 1. Keyword match → disable this entry (entry is fundamentally broken)
-///    Still retries next entry — the current request should still try other providers.
-///
-/// 2. disable_codes match → record circuit failure (e.g. 401 = key invalid)
-///    Still retries next entry — disabling is a side-effect for future requests,
-///    not a signal to abort the current request.
-///
-/// 3. Circuit breaker → trip on server errors (5xx) and connection failures (0)
-///    4xx (401/403/429) are client/credential issues — failover but don't punish entry.
-///
-/// 4. Retry decision:
-///    - status 0 / invalid status → YES retry (request/connect failure; same spirit as NEW-API code <100/>599)
-///    - 504/524 → NO retry (gateway timeout, hardcoded)
-///    - status in retry_codes → YES retry
-///    - else → NO retry
-async fn process_entry_error(
-    state: &ProxyState,
-    entry: &ApiEntry,
-    error_message: &str,
-    status: u16,
-    disable_codes: &[u16],
-    retry_codes: &[u16],
-    disable_keywords: &[String],
-) -> ErrorAction {
-    let e_lower = error_message.to_lowercase();
-
-    // 1. Keyword match → disable this entry for future requests
-    //    The entry is fundamentally broken (quota exhausted, account disabled, etc.)
-    if disable_keywords.iter().any(|kw| e_lower.contains(kw.as_str())) {
-        log::warn!(
-            "Disable keyword matched for entry {}, disabling entry",
-            entry.id
-        );
-        let _ = state.db.toggle_entry(&entry.id, false);
-        // Don't stop retrying — let the current request try other providers
-    }
-
-    // 2. disable_codes match → disable this entry for future requests
-    //    (e.g. 401 = invalid key)
-    //    Still retry current request — disable is for future, retry is for now.
-    if disable_codes.contains(&status) {
-        log::warn!(
-            "Disable status code {} matched for entry {}, disabling entry",
-            status, entry.id
-        );
-        let _ = state.db.toggle_entry(&entry.id, false);
-    }
-
-    // 3. Circuit breaker: only trip on server errors (5xx) and connection failures (0)
-    //    4xx (401/403/429) are client/credential issues — failover but don't punish entry
-    //    Keep this BEFORE retry decision: 504/524 do not retry, but still count as provider failure.
-    if status >= 500 || status == 0 {
-        record_circuit_failure(state, &entry.id).await;
-    }
-
-    // 4. 504/524 gateway timeout → never retry (hardcoded, same as NEW-API)
-    if status == 504 || status == 524 {
-        return ErrorAction { should_retry: false };
-    }
-
-    // 5. Retry decision based on retry_codes.
-    // NEW-API retries invalid/non-HTTP status codes (`code < 100 || code > 599`).
-    // In our ForwardError model, request/connect failures are represented as status=0.
-    let should_retry = status == 0 || retry_codes.contains(&status);
-
-    ErrorAction { should_retry }
 }
 
 async fn forward_single(
@@ -500,7 +390,7 @@ fn build_streaming_response(
                     504, false, Some("stream idle timeout"),
                     Some(attempt_path.as_str()), Some(StreamEndReason::Timeout),
                 );
-                spawn_record_circuit_failure(circuit_breakers.clone(), settings_db.clone(), entry_id.clone());
+                spawn_cool_down_entry(circuit_breakers.clone(), settings_db.clone(), entry_id.clone());
             }
             return Poll::Ready(Some(Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
@@ -550,7 +440,7 @@ fn build_streaming_response(
                         502, false, Some(error_message.as_str()),
                         Some(attempt_path.as_str()), Some(StreamEndReason::UpstreamError),
                     );
-                    spawn_record_circuit_failure(circuit_breakers.clone(), settings_db.clone(), entry_id.clone());
+                    spawn_cool_down_entry(circuit_breakers.clone(), settings_db.clone(), entry_id.clone());
                 }
                 Poll::Ready(Some(Err(std::io::Error::new(std::io::ErrorKind::Other, err))))
             }
@@ -647,9 +537,11 @@ fn append_and_parse_sse(
 }
 
 async fn record_circuit_success(state: &ProxyState, entry_id: &str) {
+    let _ = state.db.set_entry_cooldown(entry_id, None);
+
     let mut breakers = state.circuit_breakers.write().await;
     let recovery_secs = state.db.get_settings().ok()
-        .map(|s| s.circuit_recovery_secs as u64).unwrap_or(60);
+        .map(|s| s.circuit_recovery_secs as u64).unwrap_or(300);
 
     let cb = breakers
         .entry(entry_id.to_string())
@@ -657,20 +549,29 @@ async fn record_circuit_success(state: &ProxyState, entry_id: &str) {
     cb.record_success();
 }
 
-async fn record_circuit_failure(state: &ProxyState, entry_id: &str) {
-    let mut breakers = state.circuit_breakers.write().await;
+async fn cool_down_entry(state: &ProxyState, entry: &ApiEntry) {
     let settings = state.db.get_settings().ok();
+    let recovery_secs = settings
+        .as_ref()
+        .map(|s| s.circuit_recovery_secs)
+        .unwrap_or(300)
+        .max(1);
+    let cooldown_until = chrono::Utc::now().timestamp() + recovery_secs;
+    let _ = state.db.set_entry_cooldown(&entry.id, Some(cooldown_until));
+
+    let mut breakers = state.circuit_breakers.write().await;
     let threshold = settings
         .as_ref()
         .map(|s| s.circuit_failure_threshold as u32)
-        .unwrap_or(4);
+        .unwrap_or(1)
+        .max(1);
     let recovery_secs = settings
         .as_ref()
         .map(|s| s.circuit_recovery_secs as u64)
-        .unwrap_or(60);
+        .unwrap_or(300);
 
     let cb = breakers
-        .entry(entry_id.to_string())
+        .entry(entry.id.clone())
         .or_insert_with(|| CircuitBreaker::new(recovery_secs));
     cb.set_recovery_secs(recovery_secs);
     cb.record_failure(threshold);
@@ -686,7 +587,9 @@ fn spawn_record_circuit_success(
             .get_settings()
             .ok()
             .map(|s| s.circuit_recovery_secs as u64)
-            .unwrap_or(60);
+            .unwrap_or(300);
+
+        let _ = db.set_entry_cooldown(&entry_id, None);
 
         let mut breakers = circuit_breakers.write().await;
         let cb = breakers
@@ -697,7 +600,7 @@ fn spawn_record_circuit_success(
     });
 }
 
-fn spawn_record_circuit_failure(
+fn spawn_cool_down_entry(
     circuit_breakers: Arc<tokio::sync::RwLock<std::collections::HashMap<String, CircuitBreaker>>>,
     db: Arc<Database>,
     entry_id: String,
@@ -707,11 +610,15 @@ fn spawn_record_circuit_failure(
         let threshold = settings
             .as_ref()
             .map(|s| s.circuit_failure_threshold as u32)
-            .unwrap_or(4);
+            .unwrap_or(1)
+            .max(1);
         let recovery_secs = settings
             .as_ref()
             .map(|s| s.circuit_recovery_secs as u64)
-            .unwrap_or(60);
+            .unwrap_or(300);
+
+        let cooldown_until = chrono::Utc::now().timestamp() + recovery_secs as i64;
+        let _ = db.set_entry_cooldown(&entry_id, Some(cooldown_until));
 
         let mut breakers = circuit_breakers.write().await;
         let cb = breakers

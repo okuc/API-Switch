@@ -3,30 +3,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
-/// Parse a comma-separated list of status codes and ranges (e.g. "401,500-503") into a Vec<u16>.
-pub fn parse_status_codes(input: &str) -> Vec<u16> {
-    let mut codes = Vec::new();
-    for part in input.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        if let Some((start_str, end_str)) = part.split_once('-') {
-            if let (Ok(start), Ok(end)) = (
-                start_str.trim().parse::<u16>(),
-                end_str.trim().parse::<u16>(),
-            ) {
-                for code in start..=end {
-                    codes.push(code);
-                }
-            }
-        } else if let Ok(code) = part.parse::<u16>() {
-            codes.push(code);
-        }
-    }
-    codes
-}
-
 /// Simple circuit breaker for API entries.
 /// State is kept in memory only (not persisted).
 pub struct CircuitBreaker {
