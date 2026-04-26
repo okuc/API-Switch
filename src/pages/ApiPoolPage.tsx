@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { GripVertical, Plus, MessageSquare } from "lucide-react";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -312,7 +313,7 @@ function AddApiDialog({
       onOpenChange(false);
     },
     onError: (err) => {
-      alert(`Add API failed: ${err}`);
+      toast.error(`${t("apiPool.addApi")} ${t("common.failed")}: ${err}`);
     },
   });
 

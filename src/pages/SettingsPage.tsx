@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getSettings, updateSettings, getProxyStatus, startProxy, stopProxy } from "@/lib/api";
+import { toast } from "sonner";
 import { DEFAULT_SETTINGS } from "@/types";
 
 export function SettingsPage() {
@@ -78,7 +79,7 @@ export function SettingsPage() {
                   queryClient.invalidateQueries({ queryKey: ["proxyStatus"] });
                   queryClient.invalidateQueries({ queryKey: ["settings"] });
                 } catch (err) {
-                  console.error("Failed to toggle proxy:", err);
+                  toast.error(`${t("settings.proxy.title")} ${t("common.failed")}: ${err}`);
                 }
               }}
             />

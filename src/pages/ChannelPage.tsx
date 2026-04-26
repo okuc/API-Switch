@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import {
   Edit, Plus, RefreshCw, Save, Trash2, Link2, CheckSquare, Square, Eye, EyeOff, Power, PowerOff,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -72,7 +73,7 @@ export function ChannelPage() {
     mutationFn: deleteChannel,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["channels"] }),
     onError: (err) => {
-      alert(`Delete failed: ${err}`);
+      toast.error(`${t("channel.delete")} ${t("common.failed")}: ${err}`);
     },
   });
 
@@ -182,7 +183,7 @@ function ChannelRow({
     },
     onError: (err) => {
       setFetching(false);
-      alert(`Fetch models failed: ${err}`);
+      toast.error(`${t("channel.models.fetch")} ${t("common.failed")}: ${err}`);
     },
   });
 
@@ -201,6 +202,7 @@ function ChannelRow({
       if (context?.previous) {
         queryClient.setQueryData(["channels"], context.previous);
       }
+      toast.error(`${t("common.save")} ${t("common.failed")}`);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["channels"] }),
   });
@@ -221,7 +223,7 @@ function ChannelRow({
       if (context?.previous) {
         queryClient.setQueryData(["channels"], context.previous);
       }
-      alert(`Select models failed: ${err}`);
+      toast.error(`${t("channel.models.saveAndSelect")} ${t("common.failed")}: ${err}`);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["channels"] }),
   });
@@ -481,7 +483,7 @@ function ChannelEditorDialog({
       }
       setSelectedModels([]);
     } catch (err) {
-      alert(`Fetch models failed: ${err}`);
+      toast.error(`${t("channel.models.fetch")} ${t("common.failed")}: ${err}`);
     } finally {
       setFetchingModels(false);
     }
@@ -545,7 +547,7 @@ function ChannelEditorDialog({
       queryClient.invalidateQueries({ queryKey: ["channels"] });
       onOpenChange(false);
     } catch (err) {
-      alert(`Save failed: ${err}`);
+      toast.error(`${t("common.save")} ${t("common.failed")}: ${err}`);
     } finally {
       setSaving(false);
     }

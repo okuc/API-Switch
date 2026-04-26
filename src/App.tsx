@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Toaster } from "sonner";
 import { ApiPoolPage } from "@/pages/ApiPoolPage";
 import { ChannelPage } from "@/pages/ChannelPage";
 import { TokenPage } from "@/pages/TokenPage";
@@ -198,6 +199,8 @@ export default function App() {
         />
       )}
       </div>
+
+      <Toaster position="top-center" richColors closeButton />
     </div>
   );
 }

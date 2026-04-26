@@ -252,7 +252,8 @@
     "success": "成功",
     "noData": "暂无数据",
     "action": "操作",
-    "doNotShowAgain": "不再提示"
+    "doNotShowAgain": "不再提示",
+    "failed": "失败"
   },
   "update": {
     "newVersion": "发现新版本 v{{version}}",
