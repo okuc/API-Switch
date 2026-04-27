@@ -29,7 +29,7 @@ impl Default for AppSettings {
             circuit_recovery_secs: 300,
             locale: "zh".to_string(),
             theme: "light".to_string(),
-            circuit_disable_codes: "401".to_string(),
+            circuit_disable_codes: "401,403,410".to_string(),
             circuit_retry_codes: "100-199,300-399,401-407,409-499,500-503,505-523,525-599".to_string(),
             disable_keywords: "Your credit balance is too low\nThis organization has been disabled.\nYou exceeded your current quota\nPermission denied\nThe security token included in the request is invalid\nOperation not allowed\nYour account is not authorized".to_string(),
             autostart: false,

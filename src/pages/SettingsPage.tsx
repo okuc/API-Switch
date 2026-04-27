@@ -135,6 +135,14 @@ export function SettingsPage() {
               onChange={(e) => update("circuit_recovery_secs", parseInt(e.target.value) || 300)}
             />
           </div>
+          <div className="space-y-2">
+            <Label>{t("settings.circuit.disableCodes")}</Label>
+            <Input
+              value={s.circuit_disable_codes}
+              onChange={(e) => update("circuit_disable_codes", e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">{t("settings.circuit.disableDesc")}</p>
+          </div>
         </CardContent>
       </Card>
 

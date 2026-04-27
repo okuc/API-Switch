@@ -132,7 +132,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
         ("access_key_required", "0"),
         ("circuit_failure_threshold", "1"),
         ("circuit_recovery_secs", "300"),
-        ("circuit_disable_codes", "401"),
+        ("circuit_disable_codes", "401,403,410"),
         ("circuit_retry_codes", "100-199,300-399,401-407,409-499,500-503,505-523,525-599"),
         ("disable_keywords", "Your credit balance is too low\nThis organization has been disabled.\nYou exceeded your current quota\nPermission denied\nThe security token included in the request is invalid\nOperation not allowed\nYour account is not authorized"),
         ("locale", "zh"),
@@ -159,6 +159,11 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
     .map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute(
         "UPDATE config SET value = '300' WHERE key = 'circuit_recovery_secs' AND value = '60'",
+        [],
+    )
+    .map_err(|e| AppError::Database(e.to_string()))?;
+    conn.execute(
+        "UPDATE config SET value = '401,403,410' WHERE key = 'circuit_disable_codes' AND value = '401'",
         [],
     )
     .map_err(|e| AppError::Database(e.to_string()))?;

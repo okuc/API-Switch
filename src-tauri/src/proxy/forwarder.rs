@@ -155,7 +155,7 @@ impl Drop for StreamLogGuard {
 /// Personal-version cooldown strategy:
 /// 1. Any upstream failure is considered abnormal for this model entry.
 /// 2. Failed entries are cooled down for `circuit_recovery_secs` seconds and skipped by routing.
-/// 3. User enabled/disabled state is never changed automatically.
+/// 3. Unrecoverable status codes can disable an entry automatically.
 pub async fn forward_with_retry(
     state: &ProxyState,
     entries: &[ApiEntry],
@@ -203,6 +203,7 @@ pub async fn forward_with_retry(
                 let elapsed = start.elapsed();
                 let latency_ms = elapsed.as_millis() as i64;
                 let log_status = if status > 0 { status as i32 } else { 502 };
+                let settings = state.db.get_settings().ok();
                 push_attempt(&mut attempts, entry, log_status, false, Some(e.clone()));
                 let attempt_path = attempt_path_json(&attempts);
 
@@ -213,8 +214,17 @@ pub async fn forward_with_retry(
                     Some(attempt_path.as_str()), None,
                 );
 
-                // Step 2: mark this entry as abnormal and cool it down.
-                cool_down_entry(state, entry).await;
+                // Step 2: disable unrecoverable status codes, otherwise cool down.
+                if status > 0
+                    && settings
+                        .as_ref()
+                        .map(|s| should_disable_entry_for_status(&s.circuit_disable_codes, status))
+                        .unwrap_or(false)
+                {
+                    disable_entry(state, entry).await;
+                } else {
+                    cool_down_entry(state, entry).await;
+                }
 
                 last_error = Some((e, status));
                 continue;
@@ -544,6 +554,46 @@ fn refresh_tray(app_handle: &tauri::AppHandle) {
             let _ = tray.set_menu(Some(new_menu));
         }
     }
+}
+
+fn status_matches_rule(rule: &str, status: u16) -> bool {
+    let rule = rule.trim();
+    if rule.is_empty() {
+        return false;
+    }
+
+    if let Some((start, end)) = rule.split_once('-') {
+        let Ok(start) = start.trim().parse::<u16>() else { return false; };
+        let Ok(end) = end.trim().parse::<u16>() else { return false; };
+        return status >= start && status <= end;
+    }
+
+    rule.parse::<u16>() == Ok(status)
+}
+
+fn should_disable_entry_for_status(disable_codes: &str, status: u16) -> bool {
+    disable_codes
+        .split(',')
+        .any(|rule| status_matches_rule(rule, status))
+}
+
+async fn disable_entry(state: &ProxyState, entry: &ApiEntry) {
+    let recovery_secs = state
+        .db
+        .get_settings()
+        .ok()
+        .map(|s| s.circuit_recovery_secs)
+        .unwrap_or(300)
+        .max(1);
+    let cooldown_until = chrono::Utc::now().timestamp() + recovery_secs;
+
+    let _ = state.db.toggle_entry(&entry.id, false);
+    let _ = state.db.set_entry_cooldown(&entry.id, Some(cooldown_until));
+    let _ = state.app_handle.emit("entries-changed", ());
+    refresh_tray(&state.app_handle);
+
+    let mut breakers = state.circuit_breakers.write().await;
+    breakers.remove(&entry.id);
 }
 
 async fn record_circuit_success(state: &ProxyState, entry_id: &str) {

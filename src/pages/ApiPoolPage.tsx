@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { GripVertical, Plus, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -23,10 +23,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { listEntries, toggleEntry, reorderEntries, listChannels, createEntry } from "@/lib/api";
-import type { ApiEntry, Channel, ApiType } from "@/types";
+import type { ApiEntry, Channel } from "@/types";
 import { cn } from "@/lib/utils";
-import { API_TYPE_OPTIONS } from "@/types";
 import { TestChatDialog } from "@/components/proxy/TestChatDialog";
+import { getCatalogModel, formatTokenCount, type CatalogModel } from "@/lib/modelsCatalog";
 import {
   DndContext,
   closestCenter,
@@ -57,6 +57,71 @@ function StatusDot({ state }: { state: string }) {
   );
 }
 
+function modalityLabel(value: string, t: (key: string) => string) {
+  switch (value) {
+    case "text": return t("apiPool.modelMeta.modalities.text");
+    case "image": return t("apiPool.modelMeta.modalities.image");
+    case "pdf": return t("apiPool.modelMeta.modalities.pdf");
+    case "audio": return t("apiPool.modelMeta.modalities.audio");
+    case "video": return t("apiPool.modelMeta.modalities.video");
+    default: return value;
+  }
+}
+
+function getFeatureLabels(model: CatalogModel, t: (key: string) => string) {
+  const labels: string[] = [];
+  const inputs = model.modalities?.input || [];
+  const outputs = model.modalities?.output || [];
+
+  if (outputs.includes("image")) labels.push(t("apiPool.modelMeta.features.imageGeneration"));
+  if (inputs.includes("image")) labels.push(t("apiPool.modelMeta.features.imageUnderstanding"));
+  if (inputs.includes("audio") || outputs.includes("audio")) labels.push(t("apiPool.modelMeta.features.audio"));
+  if (inputs.includes("video") || outputs.includes("video")) labels.push(t("apiPool.modelMeta.features.video"));
+  if (inputs.includes("pdf") || outputs.includes("pdf")) labels.push(t("apiPool.modelMeta.features.pdf"));
+  if (model.reasoning) labels.push(t("apiPool.modelMeta.features.reasoning"));
+  if (model.interleaved) labels.push(t("apiPool.modelMeta.features.interleaved"));
+  if (model.tool_call) labels.push(t("apiPool.modelMeta.features.toolCall"));
+  if (model.structured_output) labels.push(t("apiPool.modelMeta.features.structuredOutput"));
+  if (model.attachment) labels.push(t("apiPool.modelMeta.features.attachment"));
+  if (model.temperature) labels.push(t("apiPool.modelMeta.features.temperature"));
+  return labels;
+}
+
+function shortReleaseDate(value?: string) {
+  if (!value) return null;
+  const match = value.match(/^(\d{4})-(\d{2})/);
+  if (match) {
+    return `${match[1]}-${match[2]}`;
+  }
+  return value;
+}
+
+function ModelMetaBlock({ modelId }: { modelId: string }) {
+  const { t } = useTranslation();
+  const model = getCatalogModel(modelId);
+
+  if (!model) return null;
+
+  const features = getFeatureLabels(model, t);
+  const releaseDate = shortReleaseDate(model.release_date);
+  const context = formatTokenCount(model.limit?.context);
+  const output = formatTokenCount(model.limit?.output);
+  const segments = [
+    releaseDate ? `${t("apiPool.modelMeta.releaseDate")}: ${releaseDate}` : null,
+    ...features,
+    context ? `${t("apiPool.modelMeta.context")}: ${context}` : null,
+    output ? `${t("apiPool.modelMeta.output")}: ${output}` : null,
+  ].filter(Boolean) as string[];
+
+  if (segments.length === 0) return null;
+
+  return (
+    <div className="mt-1 text-xs text-muted-foreground truncate">
+      {segments.join(" / ")}
+    </div>
+  );
+}
+
 function getEntryStatus(entry: ApiEntry) {
   const now = Math.floor(Date.now() / 1000);
   if (entry.cooldown_until && entry.cooldown_until > now) return "open";
@@ -66,6 +131,14 @@ function getEntryStatus(entry: ApiEntry) {
   return "closed";
 }
 
+function formatCooldownRemaining(cooldownUntil: number | null | undefined) {
+  if (!cooldownUntil) return null;
+  const remaining = Math.max(0, cooldownUntil - Math.floor(Date.now() / 1000));
+  if (remaining <= 0) return null;
+  const minutes = Math.ceil(remaining / 60);
+  return `${minutes}m`;
+}
+
 function SortablePoolEntryCard({
   entry,
   onTest,
@@ -73,6 +146,7 @@ function SortablePoolEntryCard({
   entry: ApiEntry;
   onTest: (entry: ApiEntry) => void;
 }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
 
   const toggleMutation = useMutation({
@@ -95,6 +169,7 @@ function SortablePoolEntryCard({
     zIndex: isDragging ? 10 : undefined,
     opacity: isDragging ? 0.8 : undefined,
   };
+  const cooldownRemaining = formatCooldownRemaining(entry.cooldown_until);
 
   return (
     <Card
@@ -111,14 +186,18 @@ function SortablePoolEntryCard({
           <GripVertical className="h-3.5 w-3.5 shrink-0" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <StatusDot state={getEntryStatus(entry)} />
-            <span className="font-medium truncate">{entry.display_name}</span>
+            <span className="font-medium truncate">
+              {entry.channel_name || "—"} / {entry.model}
+            </span>
+            {cooldownRemaining ? (
+              <span className="text-xs text-red-500 shrink-0">
+                {t("apiPool.cooldownInline", { time: cooldownRemaining })}
+              </span>
+            ) : null}
           </div>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {entry.channel_name || "—"} / {entry.model}
-            {entry.owned_by && `  |  ${entry.owned_by}`}
-          </p>
+          <ModelMetaBlock modelId={entry.model} />
         </div>
         <Button
           variant="ghost"
@@ -301,6 +380,7 @@ function AddApiDialog({
   const [displayName, setDisplayName] = useState("");
 
   const channelOptions = channels.filter((c) => c.enabled);
+  const selectedCatalogModel = useMemo(() => getCatalogModel(modelName), [modelName]);
 
   const createMutation = useMutation({
     mutationFn: () => createEntry({
@@ -356,6 +436,13 @@ function AddApiDialog({
               placeholder={t("apiPool.modelPlaceholder")}
             />
           </div>
+
+          {selectedCatalogModel ? (
+            <div className="rounded-md border bg-muted/20 p-3">
+              <div className="text-sm font-medium">{selectedCatalogModel.name || selectedCatalogModel.id}</div>
+              <ModelMetaBlock modelId={modelName} />
+            </div>
+          ) : null}
 
           <div className="space-y-2">
             <div className="text-sm font-medium">{t("apiPool.displayName")}</div>

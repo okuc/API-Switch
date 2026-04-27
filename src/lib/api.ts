@@ -41,8 +41,15 @@ export async function fetchModels(channelId: string): Promise<ModelInfo[]> {
   return invoke("fetch_models", { channelId });
 }
 
-export async function fetchModelsDirect(apiType: string, baseUrl: string, apiKey: string): Promise<ModelInfo[]> {
-  return invoke("fetch_models_direct", { apiType, baseUrl, apiKey });
+export interface FetchModelsResult {
+  detected_type: string;
+  corrected_base_url: string;
+  models: ModelInfo[];
+  message: string;
+}
+
+export async function fetchModelsDirect(apiType: string, baseUrl: string, apiKey: string, verified = false): Promise<FetchModelsResult> {
+  return invoke("fetch_models_direct", { apiType, baseUrl, apiKey, verified });
 }
 
 export async function selectModels(channelId: string, modelNames: string[]): Promise<void> {
@@ -192,18 +199,6 @@ export async function testChat(
   messages: { role: string; content: string }[]
 ): Promise<TestChatResponse> {
   return invoke("test_chat", { entryId, messages });
-}
-
-// --- API Type Detect ---
-
-export interface DetectApiResult {
-  detected_type: string | null;
-  models: ModelInfo[];
-  message: string;
-}
-
-export async function detectApiType(baseUrl: string, apiKey: string): Promise<DetectApiResult> {
-  return invoke("detect_api_type", { baseUrl, apiKey });
 }
 
 // --- URL Probe ---

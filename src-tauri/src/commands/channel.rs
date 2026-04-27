@@ -7,6 +7,18 @@ use crate::build_tray_menu;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
+#[derive(Clone)]
+struct ProbeSuccess {
+    models: Vec<ModelInfo>,
+    corrected_base_url: String,
+}
+
+#[derive(Clone)]
+struct EndpointGuess {
+    detected_type: String,
+    corrected_base_url: String,
+}
+
 #[derive(Deserialize)]
 pub struct CreateChannelParams {
     pub name: String,
@@ -78,22 +90,6 @@ pub fn delete_channel(app: tauri::AppHandle, state: State<'_, AppState>, id: Str
     Ok(())
 }
 
-#[tauri::command]
-pub async fn fetch_models(
-    state: State<'_, AppState>,
-    channel_id: String,
-) -> Result<Vec<ModelInfo>, AppError> {
-    let channel = state.db.get_channel(&channel_id)?;
-
-    // Fetch models from upstream API via protocol adapter
-    let models = fetch_models_from_api(&channel.api_type, &channel.base_url, &channel.api_key).await?;
-
-    // Update available_models in DB
-    state.db.update_channel_models(&channel_id, &models, &channel.selected_models)?;
-
-    Ok(models)
-}
-
 #[derive(Serialize)]
 pub struct ProbeResult {
     pub reachable: bool,
@@ -143,122 +139,324 @@ pub async fn probe_url(url: String) -> Result<ProbeResult, AppError> {
     }
 }
 
+/// Smart model fetch: tries preferred type first, then auto-detects.
+/// Returns detected type and models in one call.
 #[derive(Serialize)]
-pub struct DetectApiResult {
-    pub detected_type: Option<String>,
+pub struct FetchModelsResult {
+    pub detected_type: String,
+    pub corrected_base_url: String,
     pub models: Vec<ModelInfo>,
     pub message: String,
 }
 
-/// Try each API type against the given base_url to auto-detect the correct one.
-/// Returns detected type and any models found during detection.
-#[tauri::command]
-pub async fn detect_api_type(
-    base_url: String,
-    api_key: String,
-) -> Result<DetectApiResult, AppError> {
-    let base_url = base_url.trim().trim_end_matches('/').to_string();
-    if base_url.is_empty() {
-        return Ok(DetectApiResult { detected_type: None, models: vec![], message: "Empty URL".into() });
-    }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .danger_accept_invalid_certs(true)
-        .build()
-        .map_err(|e| AppError::Network(format!("HTTP client: {e}")))?;
-
-    // 1. OpenAI / Custom: try /v1/models variants (most common)
-    {
-        let adapter = get_adapter("openai");
-        let urls = build_models_url_variants(adapter.as_ref(), &base_url, &api_key);
-        for url in &urls {
-            match try_models_endpoint(&client, adapter.as_ref(), url, &api_key).await {
-                Ok(models) if !models.is_empty() => {
-                    let count = models.len();
-                    let detected = if base_url.contains("api.openai.com") { "openai" } else { "custom" };
-                    log::info!("[detect] OpenAI-compatible via {url}, type={detected} ({count} models)");
-                    return Ok(DetectApiResult {
-                        detected_type: Some(detected.into()),
-                        models: dedup_models(models),
-                        message: format!("Detected: {detected} ({count} models)"),
-                    });
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // 2. Gemini: try /v1beta/models with query auth
-    {
-        let adapter = get_adapter("gemini");
-        let urls = build_models_url_variants(adapter.as_ref(), &base_url, &api_key);
-        for url in &urls {
-            match try_models_endpoint(&client, adapter.as_ref(), url, &api_key).await {
-                Ok(models) if !models.is_empty() => {
-                    let count = models.len();
-                    log::info!("[detect] Gemini via {url} ({count} models)");
-                    return Ok(DetectApiResult {
-                        detected_type: Some("gemini".into()),
-                        models: dedup_models(models),
-                        message: format!("Detected: gemini ({count} models)"),
-                    });
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // 3. Claude/Anthropic: chat probe (no public models listing endpoint)
-    {
-        let adapter = get_adapter("claude");
-        if let Some(models) = try_chat_probe(&client, adapter.as_ref(), &base_url, &api_key, "claude").await {
-            let count = models.len();
-            log::info!("[detect] Claude chat probe OK ({count} known models)");
-            return Ok(DetectApiResult {
-                detected_type: Some("claude".into()),
-                models,
-                message: format!("Detected: claude ({count} known models)"),
-            });
-        }
-    }
-
-    // 4. Azure: try Azure deployment endpoint
-    {
-        let adapter = get_adapter("azure");
-        let urls = build_models_url_variants(adapter.as_ref(), &base_url, &api_key);
-        for url in &urls {
-            match try_models_endpoint(&client, adapter.as_ref(), url, &api_key).await {
-                Ok(models) if !models.is_empty() => {
-                    let count = models.len();
-                    log::info!("[detect] Azure via {url} ({count} models)");
-                    return Ok(DetectApiResult {
-                        detected_type: Some("azure".into()),
-                        models: dedup_models(models),
-                        message: format!("Detected: azure ({count} models)"),
-                    });
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Ok(DetectApiResult {
-        detected_type: None,
-        models: vec![],
-        message: "Could not detect API type. Please select manually.".into(),
-    })
-}
-
-/// Fetch models directly from upstream API without needing a saved channel.
-/// Used by the "add channel" dialog to preview models before saving.
 #[tauri::command]
 pub async fn fetch_models_direct(
     _state: State<'_, AppState>,
     api_type: String,
     base_url: String,
     api_key: String,
+    verified: Option<bool>,
+) -> Result<FetchModelsResult, AppError> {
+    let base_url = normalize_base_url(&base_url);
+    if base_url.is_empty() {
+        return Err(AppError::Network("Empty URL".into()));
+    }
+
+    smart_fetch_models(&api_type, &base_url, &api_key, verified.unwrap_or(false)).await
+}
+
+#[tauri::command]
+pub async fn fetch_models(
+    state: State<'_, AppState>,
+    channel_id: String,
 ) -> Result<Vec<ModelInfo>, AppError> {
-    fetch_models_from_api(&api_type, &base_url, &api_key).await
+    let channel = state.db.get_channel(&channel_id)?;
+
+    let result = smart_fetch_models(
+        &channel.api_type,
+        &channel.base_url,
+        &channel.api_key,
+        false,
+    ).await?;
+
+    if channel.api_type != result.detected_type || normalize_base_url(&channel.base_url) != result.corrected_base_url {
+        state.db.update_channel_endpoint(&channel_id, &result.detected_type, &result.corrected_base_url)?;
+    }
+
+    state.db.update_channel_models(&channel_id, &result.models, &channel.selected_models)?;
+
+    Ok(result.models)
+}
+
+async fn smart_fetch_models(
+    api_type: &str,
+    base_url: &str,
+    api_key: &str,
+    verified: bool,
+) -> Result<FetchModelsResult, AppError> {
+    let base_url = normalize_base_url(base_url);
+
+    let endpoint_guess = if verified {
+        Some(EndpointGuess {
+            detected_type: api_type.to_string(),
+            corrected_base_url: base_url.clone(),
+        })
+    } else {
+        detect_endpoint_guess(api_type, &base_url, api_key).await
+    };
+
+    let fetch_seed_type = endpoint_guess
+        .as_ref()
+        .map(|g| g.detected_type.as_str())
+        .unwrap_or(api_type);
+    let fetch_seed_base_url = endpoint_guess
+        .as_ref()
+        .map(|g| g.corrected_base_url.as_str())
+        .unwrap_or(base_url.as_str());
+
+    let (models, actual_type, actual_base_url) = fetch_models_with_fallback(fetch_seed_type, fetch_seed_base_url, api_key).await?;
+
+    let corrected_type = endpoint_guess
+        .as_ref()
+        .map(|g| g.detected_type.clone())
+        .unwrap_or_else(|| resolve_detected_type(actual_type, &actual_base_url));
+    let corrected_base_url = endpoint_guess
+        .as_ref()
+        .map(|g| g.corrected_base_url.clone())
+        .unwrap_or(actual_base_url);
+    let count = models.len();
+
+    Ok(FetchModelsResult {
+        message: format!("Detected: {corrected_type} ({count} models)"),
+        detected_type: corrected_type,
+        corrected_base_url,
+        models,
+    })
+}
+
+async fn detect_endpoint_guess(
+    api_type: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Option<EndpointGuess> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .ok()?;
+
+    let candidates = build_base_url_candidates(&base_url);
+    let try_types = build_try_types(api_type);
+
+    for candidate_base_url in candidates {
+        for current_type in &try_types {
+            let adapter = get_adapter(current_type);
+            let urls = build_models_url_variants(adapter.as_ref(), &candidate_base_url, api_key);
+            for url in &urls {
+                match try_models_endpoint(&client, adapter.as_ref(), url, api_key).await {
+                    Ok(models) if !models.is_empty() => {
+                        if !is_authoritative_detection_success(current_type, url) {
+                            continue;
+                        }
+                        let corrected_base_url = canonical_base_url_for_success(current_type, &candidate_base_url, url);
+                        let detected = resolve_detected_type(current_type, &corrected_base_url);
+                        log::info!("[detect_endpoint] OK via {url}, type={detected}, base_url={corrected_base_url}");
+                        return Some(EndpointGuess {
+                            detected_type: detected,
+                            corrected_base_url,
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(_) => {}
+                }
+            }
+            if let Some(probe) = try_chat_probe(&client, adapter.as_ref(), &candidate_base_url, api_key, current_type).await {
+                let probe_url = adapter.build_chat_url(
+                    &candidate_base_url,
+                    match *current_type {
+                        "claude" => "claude-3-5-sonnet-20241022",
+                        "gemini" => "gemini-2.0-flash",
+                        _ => "gpt-4o-mini",
+                    },
+                );
+                if !is_authoritative_detection_success(current_type, &probe_url) {
+                    continue;
+                }
+                let detected = resolve_detected_type(current_type, &probe.corrected_base_url);
+                log::info!("[detect_endpoint] Chat probe OK, type={detected}, base_url={}", probe.corrected_base_url);
+                return Some(EndpointGuess {
+                    detected_type: detected,
+                    corrected_base_url: probe.corrected_base_url,
+                });
+            }
+        }
+    }
+
+    None
+}
+
+async fn fetch_models_with_fallback(
+    preferred_type: &str,
+    preferred_base_url: &str,
+    api_key: &str,
+) -> Result<(Vec<ModelInfo>, &'static str, String), AppError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| AppError::Network(format!("HTTP client: {e}")))?;
+
+    let candidates = build_base_url_candidates(preferred_base_url);
+    let try_types = build_try_types(preferred_type);
+    let mut last_err = String::new();
+
+    for candidate_base_url in candidates {
+        for current_type in &try_types {
+            let adapter = get_adapter(current_type);
+            let urls = build_models_url_variants(adapter.as_ref(), &candidate_base_url, api_key);
+            for url in &urls {
+                match try_models_endpoint(&client, adapter.as_ref(), url, api_key).await {
+                    Ok(models) if !models.is_empty() => {
+                        let corrected_base_url = canonical_base_url_for_success(current_type, &candidate_base_url, url);
+                        let models = dedup_models(models);
+                        log::info!("[fetch_models] OK via {url}, type={current_type}, base_url={} ({} models)", corrected_base_url, models.len());
+                        return Ok((models, current_type, corrected_base_url));
+                    }
+                    Ok(_) => {}
+                    Err(e) => { last_err = e; }
+                }
+            }
+
+            if let Some(probe) = try_chat_probe(&client, adapter.as_ref(), &candidate_base_url, api_key, current_type).await {
+                let models = dedup_models(probe.models);
+                log::info!("[fetch_models] Chat probe OK, type={current_type}, base_url={} ({} models)", probe.corrected_base_url, models.len());
+                return Ok((models, current_type, probe.corrected_base_url));
+            }
+        }
+    }
+
+    Err(AppError::Network(format!(
+        "Could not fetch models. Check URL and API Key. Last: {last_err}"
+    )))
+}
+
+fn build_try_types(preferred_type: &str) -> Vec<&'static str> {
+    let mut seen = std::collections::HashSet::new();
+    let normalized: &'static str = match preferred_type {
+        "openai" => "openai",
+        "gemini" => "gemini",
+        "claude" => "claude",
+        "azure" => "azure",
+        "custom" => "custom",
+        _ => "custom",
+    };
+    let mut v = Vec::new();
+    for t in [normalized, "openai", "custom", "gemini", "claude", "azure"] {
+        let actual = if t == "openai" && normalized == "custom" { "custom" } else { t };
+        if seen.insert(actual) {
+            v.push(actual);
+        }
+    }
+    v
+}
+
+fn is_authoritative_detection_success(api_type: &str, success_url: &str) -> bool {
+    match api_type {
+        // Prevent generic OpenAI-compatible gateways from being misclassified as Gemini.
+        "gemini" => success_url.contains("/v1beta/openai/"),
+        // Azure must really hit the deployments API.
+        "azure" => success_url.contains("/openai/deployments"),
+        _ => true,
+    }
+}
+
+fn normalize_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("https://{trimmed}")
+    }
+}
+
+fn build_base_url_candidates(base_url: &str) -> Vec<String> {
+    let normalized = normalize_base_url(base_url);
+    let mut candidates = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for candidate in [
+        normalized.clone(),
+        trim_known_api_suffix(&normalized),
+    ] {
+        if !candidate.is_empty() && seen.insert(candidate.clone()) {
+            candidates.push(candidate);
+        }
+    }
+
+    candidates
+}
+
+fn canonical_base_url_for_success(api_type: &str, fallback_base_url: &str, success_url: &str) -> String {
+    let success = success_url.trim();
+
+    if api_type == "gemini" {
+        if let Some((base, _)) = success.split_once("/v1beta/openai/") {
+            return base.trim_end_matches('/').to_string();
+        }
+    }
+
+    if api_type == "claude" {
+        if let Some((base, _)) = success.split_once("/v1/") {
+            return base.trim_end_matches('/').to_string();
+        }
+    }
+
+    if api_type == "azure" {
+        if let Some((base, _)) = success.split_once("/openai/deployments") {
+            return base.trim_end_matches('/').to_string();
+        }
+    }
+
+    if api_type == "openai" || api_type == "custom" {
+        if let Some(stripped) = success.strip_suffix("/models") {
+            return stripped.trim_end_matches('/').to_string();
+        }
+        if let Some(stripped) = success.strip_suffix("/chat/completions") {
+            return stripped.trim_end_matches('/').to_string();
+        }
+    }
+
+    normalize_base_url(fallback_base_url)
+}
+
+fn trim_known_api_suffix(base_url: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    let suffixes = [
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/v1/messages",
+        "/v1/models",
+        "/models",
+        "/v1beta/openai/chat/completions",
+        "/v1beta/openai/models",
+        "/openai/deployments",
+    ];
+    for suffix in suffixes {
+        if let Some(stripped) = base.strip_suffix(suffix) {
+            return stripped.trim_end_matches('/').to_string();
+        }
+    }
+    base.to_string()
+}
+
+fn resolve_detected_type(detected: &str, base_url: &str) -> String {
+    if detected == "openai" && !base_url.contains("api.openai.com") {
+        "custom".into()
+    } else {
+        detected.into()
+    }
 }
 
 #[tauri::command]
@@ -325,6 +523,9 @@ fn extract_models_from_json(body: &str) -> Option<Vec<ModelInfo>> {
     let models: Vec<ModelInfo> = arr.iter()
         .filter_map(|m| {
             let id = m.get("id")?.as_str()?.to_string();
+            if id.eq_ignore_ascii_case("auto") {
+                return None;
+            }
             let owned = m.get("owned_by").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
             Some(ModelInfo { name: id.clone(), id, owned_by: Some(owned) })
         })
@@ -339,7 +540,7 @@ async fn try_chat_probe(
     base_url: &str,
     api_key: &str,
     api_type: &str,
-) -> Option<Vec<ModelInfo>> {
+) -> Option<ProbeSuccess> {
     let test_model = match api_type {
         "claude" => "claude-3-5-sonnet-20241022",
         "gemini" => "gemini-2.0-flash",
@@ -353,11 +554,17 @@ async fn try_chat_probe(
         Ok(resp) => {
             let s = resp.status().as_u16();
             if s < 500 {
+                let corrected_base_url = canonical_base_url_for_success(api_type, base_url, &chat_url);
                 // Server responded → API works, return known models
                 if let Ok(text) = resp.text().await {
-                    if let Some(m) = extract_models_from_json(&text) { return Some(m); }
+                    if let Some(m) = extract_models_from_json(&text) {
+                        return Some(ProbeSuccess { models: m, corrected_base_url });
+                    }
                 }
-                return Some(known_models_for_type(api_type));
+                return Some(ProbeSuccess {
+                    models: known_models_for_type(api_type),
+                    corrected_base_url,
+                });
             }
             None
         }
@@ -398,46 +605,10 @@ fn known_models_for_type(api_type: &str) -> Vec<ModelInfo> {
 
 fn dedup_models(models: Vec<ModelInfo>) -> Vec<ModelInfo> {
     let mut seen = std::collections::HashSet::new();
-    models.into_iter().filter(|m| seen.insert(m.name.clone())).collect()
+    models
+        .into_iter()
+        .filter(|m| !m.id.eq_ignore_ascii_case("auto") && !m.name.eq_ignore_ascii_case("auto"))
+        .filter(|m| seen.insert(m.name.clone()))
+        .collect()
 }
 
-/// Fetch models with multi-layer fallback:
-/// 1. Adapter standard URL + common path variants
-/// 2. Chat probe → verify API works → return known models
-async fn fetch_models_from_api(
-    api_type: &str,
-    base_url: &str,
-    api_key: &str,
-) -> Result<Vec<ModelInfo>, AppError> {
-    let adapter = get_adapter(api_type);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .danger_accept_invalid_certs(true)
-        .build()
-        .map_err(|e| AppError::Network(format!("HTTP client: {e}")))?;
-
-    // Layer 1: Try adapter URL + common variants
-    let urls = build_models_url_variants(adapter.as_ref(), base_url, api_key);
-    let mut last_err = String::new();
-    for url in &urls {
-        match try_models_endpoint(&client, adapter.as_ref(), url, api_key).await {
-            Ok(models) if !models.is_empty() => {
-                log::info!("[fetch_models] OK via {url} ({} models)", models.len());
-                return Ok(dedup_models(models));
-            }
-            Ok(_) => {}
-            Err(e) => { last_err = e; }
-        }
-    }
-    log::warn!("[fetch_models] All model endpoints failed. Last: {last_err}");
-
-    // Layer 2: Chat probe
-    if let Some(models) = try_chat_probe(&client, adapter.as_ref(), base_url, api_key, api_type).await {
-        log::info!("[fetch_models] Chat probe OK, {} known models", models.len());
-        return Ok(models);
-    }
-
-    Err(AppError::Network(format!(
-        "Could not fetch models (tried {} endpoints). Last: {last_err}", urls.len()
-    )))
-}

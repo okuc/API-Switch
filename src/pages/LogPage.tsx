@@ -7,6 +7,40 @@ import { Switch } from "@/components/ui/switch";
 import { getUsageLogs } from "@/lib/api";
 import type { UsageLogFilter } from "@/types";
 
+interface UsageLogMeta {
+  requested_model?: string;
+  resolved_model?: string;
+  attempt_path?: Array<{
+    entry_id?: string;
+    channel?: string;
+    model?: string;
+    status_code?: number;
+    success?: boolean;
+    error?: string | null;
+  }>;
+  stream_end_reason?: string;
+}
+
+function parseUsageLogMeta(other: string | null | undefined): UsageLogMeta | null {
+  if (!other) return null;
+  try {
+    const parsed = JSON.parse(other);
+    return parsed && typeof parsed === "object" ? parsed as UsageLogMeta : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatAttemptPath(meta: UsageLogMeta | null): string[] {
+  return (meta?.attempt_path || [])
+    .map((attempt) => {
+      const title = [attempt.channel, attempt.model].filter(Boolean).join(" / ");
+      const status = attempt.status_code ? ` [${attempt.status_code}]` : "";
+      return `${title || "unknown"}${status}`;
+    })
+    .filter(Boolean);
+}
+
 export function LogPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -105,6 +139,10 @@ export function LogPage() {
           <tbody>
             {logs.map((log) => {
               const isExpanded = expandedId === log.id;
+              const meta = parseUsageLogMeta(log.other);
+              const resolvedModel = meta?.resolved_model || log.model;
+              const requestedModel = meta?.requested_model || log.requested_model;
+              const attemptPath = formatAttemptPath(meta);
               return (
                 <Fragment key={log.id}>
                   <tr
@@ -121,11 +159,12 @@ export function LogPage() {
                       <div>{log.token_name || log.access_key_name || <span className="text-muted-foreground">-</span>}</div>
                     </td>
                     <td className="px-3 py-2 font-mono text-xs">
-                      <div>
-                        {log.requested_model === "auto"
-                          ? `(auto)${log.model}`
-                          : log.model}
-                      </div>
+                      <div>{requestedModel === "auto" ? `(auto) ${resolvedModel}` : resolvedModel}</div>
+                      {requestedModel && requestedModel !== resolvedModel ? (
+                        <div className="text-muted-foreground mt-0.5">
+                          {t("log.requestedModel")}: {requestedModel}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <div>{`${log.use_time || Math.ceil(log.latency_ms / 1000)}s${log.is_stream && log.first_token_ms > 0 ? ` / ${(log.first_token_ms / 1000).toFixed(1)}s` : ""}  ${log.is_stream ? t("log.streamShort") : t("log.nonStreamShort")}`}</div>
@@ -142,7 +181,26 @@ export function LogPage() {
                     <tr className="border-b bg-muted/20">
                       <td colSpan={8} className="px-4 py-3">
                         <div className="space-y-2 text-xs max-w-3xl">
-                          {log.other ? (
+                          {meta ? (
+                            <div className="grid gap-1 rounded bg-background/60 p-2 text-muted-foreground">
+                              <div>
+                                <span className="font-medium">{t("log.requestedModel")}:</span> {requestedModel || "-"}
+                              </div>
+                              <div>
+                                <span className="font-medium">{t("log.resolvedModel")}:</span> {resolvedModel || "-"}
+                              </div>
+                              {attemptPath.length ? (
+                                <div>
+                                  <span className="font-medium">{t("log.attemptPath")}:</span> {attemptPath.join(" → ")}
+                                </div>
+                              ) : null}
+                              {meta.stream_end_reason ? (
+                                <div>
+                                  <span className="font-medium">{t("log.streamEndReason")}:</span> {meta.stream_end_reason}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : log.other ? (
                             <div>
                               <div className="font-medium text-muted-foreground mb-1">Meta</div>
                               <pre className="whitespace-pre-wrap break-all text-muted-foreground">{log.other}</pre>

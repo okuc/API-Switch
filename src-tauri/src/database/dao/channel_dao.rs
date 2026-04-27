@@ -149,7 +149,16 @@ impl Database {
         conn.execute(
             "UPDATE channels SET name=?1, api_type=?2, base_url=?3, api_key=?4, enabled=?5, notes=?6, updated_at=?7
              WHERE id=?8",
-            rusqlite::params![name, api_type, base_url, api_key, enabled_val, notes, now, id],
+            rusqlite::params![
+                name,
+                api_type,
+                base_url,
+                api_key,
+                enabled_val,
+                notes,
+                now,
+                id
+            ],
         )?;
 
         Ok(())
@@ -213,6 +222,21 @@ impl Database {
             })
         })
         .map_err(|e| AppError::NotFound(format!("Channel {id}: {e}")))
+    }
+
+    pub fn update_channel_endpoint(
+        &self,
+        id: &str,
+        api_type: &str,
+        base_url: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE channels SET api_type=?1, base_url=?2, updated_at=?3 WHERE id=?4",
+            rusqlite::params![api_type, base_url, now, id],
+        )?;
+        Ok(())
     }
 
     /// Disable a channel by ID (sets enabled=0 and cascades to api_entries).

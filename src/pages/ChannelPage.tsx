@@ -35,9 +35,8 @@ import {
   fetchModelsDirect,
   selectModels,
   probeUrl,
-  detectApiType,
 } from "@/lib/api";
-import type { ProbeResult, DetectApiResult } from "@/lib/api";
+import type { ProbeResult } from "@/lib/api";
 import { API_TYPE_OPTIONS, API_TYPE_DEFAULT_URLS } from "@/types";
 import type { ApiType, Channel, CreateChannelParams, ModelInfo, UpdateChannelParams } from "@/types";
 
@@ -431,8 +430,7 @@ function ChannelEditorDialog({
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [urlProbe, setUrlProbe] = useState<ProbeResult | null>(null);
   const [probingUrl, setProbingUrl] = useState(false);
-  const [detecting, setDetecting] = useState(false);
-  const [detectResult, setDetectResult] = useState<DetectApiResult | null>(null);
+  const [endpointVerified, setEndpointVerified] = useState(false);
 
   const isEdit = !!channel;
 
@@ -442,6 +440,7 @@ function ChannelEditorDialog({
     setSelectedModels([]);
     setModelSearch("");
     setShowApiKey(false);
+    setEndpointVerified(false);
     if (channel) {
       setForm({
         id: channel.id,
@@ -471,47 +470,10 @@ function ChannelEditorDialog({
     return () => clearTimeout(t);
   }, [form.base_url]);
 
-  // Reset detect result when URL or key changes
-  useEffect(() => {
-    setDetectResult(null);
-    if (detecting) setDetecting(false);
-  }, [form.base_url, form.api_key]);
-
-  // Step 1: Auto-detect API type by trying OpenAI/Gemini/Claude/Azure
-  const handleDetect = async () => {
-    if (!form.base_url.trim() || !form.api_key.trim()) {
-      toast.error("URL and API Key are required for detection");
-      return;
-    }
-    setDetecting(true);
-    setDetectResult(null);
-    try {
-      const result = await detectApiType(form.base_url.trim(), form.api_key.trim());
-      setDetectResult(result);
-      if (result.detected_type) {
-        // Auto-fill api_type
-        setForm((prev) => ({
-          ...prev,
-          api_type: result.detected_type as ApiType,
-        }));
-        toast.success(result.message);
-        // If detection returned models, populate them directly (skip step 2)
-        if (result.models.length > 0) {
-          setAvailableModels(result.models);
-          setSelectedModels([]);
-        }
-      } else {
-        toast.warning(result.message);
-      }
-    } catch (err) {
-      toast.error(`Detection failed: ${err}`);
-      setDetectResult({ detected_type: null, models: [], message: String(err) });
-    } finally {
-      setDetecting(false);
-    }
-  };
-
   const setValue = <K extends keyof ChannelFormState>(key: K, value: ChannelFormState[K]) => {
+    if (key === "api_type" || key === "base_url" || key === "api_key") {
+      setEndpointVerified(false);
+    }
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -523,9 +485,9 @@ function ChannelEditorDialog({
         ? API_TYPE_DEFAULT_URLS[type] || prev.base_url
         : prev.base_url,
     }));
-    // Type changed 鈥?reset models
     setAvailableModels([]);
     setSelectedModels([]);
+    setEndpointVerified(false);
   };
 
   const handleFetchModels = async () => {
@@ -535,17 +497,22 @@ function ChannelEditorDialog({
         // Edit mode: use existing channel ID
         const models = await fetchModels(form.id);
         setAvailableModels(models);
+        queryClient.invalidateQueries({ queryKey: ["channels"] });
       } else {
-        // New mode: fetch directly without creating channel
-        const models = await fetchModelsDirect(form.api_type, form.base_url, form.api_key);
-        setAvailableModels(models);
+        // New mode: smart fetch — auto-detect API type + fetch models in one call
+        const result = await fetchModelsDirect(form.api_type, form.base_url, form.api_key, endpointVerified);
+        setForm((prev) => ({
+          ...prev,
+          api_type: result.detected_type as ApiType,
+          base_url: result.corrected_base_url || prev.base_url,
+        }));
+        setEndpointVerified(true);
+        toast.success(`${t("channel.models.fetch")} → ${result.detected_type.toUpperCase()}`);
+        setAvailableModels(result.models);
       }
       setSelectedModels([]);
     } catch (err) {
       toast.error(`${t("channel.models.fetch")} ${t("common.failed")}: ${err}`);
-      if (urlProbe?.reachable) {
-        toast.error("URL is reachable but model listing failed. The endpoint path may differ from the selected API type.", { duration: 6000 });
-      }
     } finally {
       setFetchingModels(false);
     }
@@ -697,7 +664,7 @@ function ChannelEditorDialog({
             </div>
           </div>
 
-          {/* Model Selection — Two-step flow */}
+          {/* Model Selection */}
           <div className="space-y-3 pt-4 border-t">
             <div className="flex items-center justify-between">
               <div>
@@ -712,47 +679,17 @@ function ChannelEditorDialog({
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-2">
-                {/* Step 1: Detect API type */}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="gap-1.5"
-                  onClick={handleDetect}
-                  disabled={!form.base_url.trim() || !form.api_key.trim() || detecting}
-                  title="Auto-detect API type (OpenAI / Anthropic / Gemini / Azure)"
-                >
-                  <RefreshCw className={cn("h-3.5 w-3.5", detecting && "animate-spin")} />
-                  {detecting ? "Detecting..." : "Detect API Type"}
-                </Button>
-                {/* Step 2: Fetch models */}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="gap-1.5"
-                  onClick={handleFetchModels}
-                  disabled={!canSave || fetchingModels}
-                >
-                  <RefreshCw className={cn("h-3.5 w-3.5", fetchingModels && "animate-spin")} />
-                  {fetchingModels ? t("channel.models.fetching") : t("channel.models.fetch")}
-                </Button>
-              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                onClick={handleFetchModels}
+                disabled={!canSave || fetchingModels}
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", fetchingModels && "animate-spin")} />
+                {fetchingModels ? t("channel.models.fetching") : t("channel.models.fetch")}
+              </Button>
             </div>
-
-            {/* Detection result banner */}
-            {detectResult && (
-              <div className={cn(
-                "rounded-md border px-3 py-2 text-xs",
-                detectResult.detected_type
-                  ? "border-green-500/40 bg-green-50 text-green-800 dark:bg-green-950 dark:text-green-200"
-                  : "border-amber-500/40 bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
-              )}>
-                {detectResult.message}
-                {detectResult.detected_type && (
-                  <span className="ml-2 font-semibold">→ {detectResult.detected_type.toUpperCase()}</span>
-                )}
-              </div>
-            )}
 
             {availableModels.length > 0 && (
               <>

@@ -35,12 +35,16 @@ export function TestChatDialog({ open, onOpenChange, entry }: TestChatDialogProp
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<boolean>(false);
+  const requestSeqRef = useRef(0);
 
   useEffect(() => {
     if (open && entry) {
+      requestSeqRef.current += 1;
+      abortRef.current = false;
       setMessages([]);
       setInput("");
       setError(null);
+      setLoading(false);
     }
   }, [open, entry]);
 
@@ -65,6 +69,7 @@ export function TestChatDialog({ open, onOpenChange, entry }: TestChatDialogProp
     setInput("");
     setLoading(true);
     abortRef.current = false;
+    const requestSeq = ++requestSeqRef.current;
 
     const start = performance.now();
 
@@ -74,7 +79,7 @@ export function TestChatDialog({ open, onOpenChange, entry }: TestChatDialogProp
         newMessages.map((m) => ({ role: m.role, content: m.content }))
       );
 
-      if (abortRef.current) return;
+      if (abortRef.current || requestSeqRef.current !== requestSeq) return;
 
       const connect_ms = Math.round(performance.now() - start);
 
@@ -88,11 +93,11 @@ export function TestChatDialog({ open, onOpenChange, entry }: TestChatDialogProp
           : undefined,
       }]);
     } catch (err: unknown) {
-      if (abortRef.current) return;
+      if (abortRef.current || requestSeqRef.current !== requestSeq) return;
       setError(err instanceof Error ? err.message : String(err));
       setMessages(newMessages);
     } finally {
-      if (!abortRef.current) {
+      if (!abortRef.current && requestSeqRef.current === requestSeq) {
         setLoading(false);
       }
     }
@@ -106,6 +111,7 @@ export function TestChatDialog({ open, onOpenChange, entry }: TestChatDialogProp
   };
 
   const clearMessages = () => {
+    requestSeqRef.current += 1;
     abortRef.current = true;
     setMessages([]);
     setError(null);
@@ -113,7 +119,10 @@ export function TestChatDialog({ open, onOpenChange, entry }: TestChatDialogProp
   };
 
   const handleClose = (v: boolean) => {
+    requestSeqRef.current += 1;
     abortRef.current = true;
+    setLoading(false);
+    setError(null);
     onOpenChange(v);
   };
 
