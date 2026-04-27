@@ -14,6 +14,7 @@ pub struct Channel {
     pub enabled: bool,
     pub last_fetch_at: i64,
     pub notes: String,
+    pub response_ms: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -31,7 +32,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
             "SELECT id, name, api_type, base_url, api_key, available_models, selected_models,
-                    enabled, last_fetch_at, notes, created_at, updated_at
+                    enabled, last_fetch_at, notes, response_ms, created_at, updated_at
              FROM channels ORDER BY created_at",
         )?;
 
@@ -53,8 +54,9 @@ impl Database {
                     enabled: enabled != 0,
                     last_fetch_at: row.get(8)?,
                     notes: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
+                    response_ms: row.get(10)?,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -92,6 +94,7 @@ impl Database {
             enabled: true,
             last_fetch_at: 0,
             notes: notes.unwrap_or("").to_string(),
+            response_ms: String::new(),
             created_at: now,
             updated_at: now,
         })
@@ -113,7 +116,7 @@ impl Database {
         let current: Channel = {
             let mut stmt = conn.prepare(
                 "SELECT id, name, api_type, base_url, api_key, available_models, selected_models,
-                        enabled, last_fetch_at, notes, created_at, updated_at
+                        enabled, last_fetch_at, notes, response_ms, created_at, updated_at
                  FROM channels WHERE id = ?1",
             )?;
             stmt.query_row([id], |row| {
@@ -132,8 +135,9 @@ impl Database {
                     enabled: enabled != 0,
                     last_fetch_at: row.get(8)?,
                     notes: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
+                    response_ms: row.get(10)?,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
                 })
             })
             .map_err(|e| AppError::NotFound(format!("Channel {id}: {e}")))?
@@ -197,7 +201,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn.prepare(
             "SELECT id, name, api_type, base_url, api_key, available_models, selected_models,
-                    enabled, last_fetch_at, notes, created_at, updated_at
+                    enabled, last_fetch_at, notes, response_ms, created_at, updated_at
              FROM channels WHERE id = ?1",
         )?;
 
@@ -217,8 +221,9 @@ impl Database {
                 enabled: enabled != 0,
                 last_fetch_at: row.get(8)?,
                 notes: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
+                response_ms: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
             })
         })
         .map_err(|e| AppError::NotFound(format!("Channel {id}: {e}")))
@@ -252,6 +257,21 @@ impl Database {
             rusqlite::params![now, channel_id],
         )?;
         log::warn!("Channel disabled by keyword match: {channel_id}");
+        Ok(())
+    }
+
+    /// Update channel response time.
+    pub fn update_channel_response_ms(
+        &self,
+        channel_id: &str,
+        response_ms: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE channels SET response_ms = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![response_ms, now, channel_id],
+        )?;
         Ok(())
     }
 }

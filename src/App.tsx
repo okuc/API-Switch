@@ -49,9 +49,19 @@ export default function App() {
     queryFn: getSettings,
   });
 
-  const [guideOpen, setGuideOpen] = useState(true);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [updateChecked, setUpdateChecked] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string; url: string } | null>(null);
+
+  // Show guide only after settings confirm it should be shown; check updates if guide won't show
+  useEffect(() => {
+    if (!settings) return;
+    if (settings.show_guide !== false) {
+      setGuideOpen(true);
+    } else {
+      doCheckUpdate();
+    }
+  }, [settings?.show_guide]);
 
   // Check for updates once after guide is dismissed (or immediately if no guide)
   const doCheckUpdate = async () => {
@@ -67,13 +77,6 @@ export default function App() {
     }
     doCheckUpdate();
   };
-
-  // If no guide shown, check immediately
-  useEffect(() => {
-    if (settings?.show_guide === false) {
-      doCheckUpdate();
-    }
-  }, [settings?.show_guide]);
 
   // Apply locale and theme
   useEffect(() => {
@@ -143,61 +146,61 @@ export default function App() {
         </div>
       )}
       <div className="flex flex-1 min-h-0">
-      <aside className="flex w-56 flex-col border-r border-sidebar-border bg-sidebar-background">
-        {/* Logo */}
-        <div className="flex items-center gap-2 px-4 py-4">
-          <Power className="h-5 w-5 text-primary" />
-          <span className="text-lg font-semibold">API Switch</span>
-        </div>
+        <aside className="flex w-56 flex-col border-r border-sidebar-border bg-sidebar-background">
+          {/* Logo */}
+          <div className="flex items-center gap-2 px-4 py-4">
+            <Power className="h-5 w-5 text-primary" />
+            <span className="text-lg font-semibold">API Switch</span>
+          </div>
 
-        <Separator />
+          <Separator />
 
-        {/* Navigation */}
-        <ScrollArea className="flex-1 px-2 py-2">
-          <nav className="flex flex-col gap-1">
-            {NAV_ITEMS.map(({ key, icon: Icon, labelKey, external }) => (
-              <Button
-                key={key}
-                variant={currentPage === key ? "secondary" : "ghost"}
-                className={cn(
-                  "justify-start gap-2 px-3",
-                  currentPage === key && "bg-sidebar-accent text-sidebar-accent-foreground"
-                )}
-                onClick={() => {
-                  if (external) {
-                    openUrl(external);
-                  } else {
-                    setCurrentPage(key);
-                  }
-                }}
-              >
-                <Icon className="h-4 w-4" />
-                {t(labelKey)}
-              </Button>
-            ))}
-          </nav>
-        </ScrollArea>
+          {/* Navigation */}
+          <ScrollArea className="flex-1 px-2 py-2">
+            <nav className="flex flex-col gap-1">
+              {NAV_ITEMS.map(({ key, icon: Icon, labelKey, external }) => (
+                <Button
+                  key={key}
+                  variant={currentPage === key ? "secondary" : "ghost"}
+                  className={cn(
+                    "justify-start gap-2 px-3",
+                    currentPage === key && "bg-sidebar-accent text-sidebar-accent-foreground"
+                  )}
+                  onClick={() => {
+                    if (external) {
+                      openUrl(external);
+                    } else {
+                      setCurrentPage(key);
+                    }
+                  }}
+                >
+                  <Icon className="h-4 w-4" />
+                  {t(labelKey)}
+                </Button>
+              ))}
+            </nav>
+          </ScrollArea>
 
-        {/* Star on GitHub */}
-        <div className="flex justify-center pb-4">
-          <a href="https://github.com/wang1970/API-Switch" target="_blank" rel="noopener noreferrer">
-            <img src="/star.jpg" alt="Star on GitHub" className="cursor-pointer hover:opacity-80 transition-opacity" />
-          </a>
-        </div>
-      </aside>
+          {/* Star on GitHub */}
+          <div className="flex justify-center pb-4">
+            <a href="https://github.com/wang1970/API-Switch" target="_blank" rel="noopener noreferrer">
+              <img src="/star.jpg" alt="Star on GitHub" className="cursor-pointer hover:opacity-80 transition-opacity" />
+            </a>
+          </div>
+        </aside>
 
-      <main className="flex-1 overflow-auto">
-        {renderPage()}
-      </main>
+        <main className="flex-1 overflow-auto">
+          {renderPage()}
+        </main>
 
-      {/* Welcome Guide - show on first launch */}
-      {settings?.show_guide !== false && (
-        <WelcomeGuide
-          open={guideOpen}
-          onOpenChange={setGuideOpen}
-          onDismiss={handleGuideDismiss}
-        />
-      )}
+        {/* Welcome Guide - show on first launch */}
+        {settings?.show_guide !== false && (
+          <WelcomeGuide
+            open={guideOpen}
+            onOpenChange={setGuideOpen}
+            onDismiss={handleGuideDismiss}
+          />
+        )}
       </div>
 
       <Toaster position="top-center" richColors closeButton />

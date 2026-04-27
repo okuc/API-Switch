@@ -15,6 +15,7 @@ export interface Channel {
   enabled: boolean;
   last_fetch_at: number;
   notes: string;
+  response_ms: string;
   created_at: number;
   updated_at: number;
 }

@@ -89,6 +89,7 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
 
     ensure_api_entry_columns(conn)?;
     ensure_usage_log_columns(conn)?;
+    ensure_channel_columns(conn)?;
 
     // Indexes
     conn.execute(
@@ -173,6 +174,11 @@ pub fn create_tables(conn: &Connection) -> Result<(), AppError> {
 
 fn ensure_api_entry_columns(conn: &Connection) -> Result<(), AppError> {
     ensure_column(conn, "api_entries", "cooldown_until", "INTEGER")?;
+    Ok(())
+}
+
+fn ensure_channel_columns(conn: &Connection) -> Result<(), AppError> {
+    ensure_column(conn, "channels", "response_ms", "TEXT DEFAULT ''")?;
     Ok(())
 }
 

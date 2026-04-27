@@ -185,7 +185,7 @@ function SortablePoolEntryCard({
         >
           <GripVertical className="h-3.5 w-3.5 shrink-0" />
         </div>
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 overflow-hidden">
           <div className="flex items-center gap-2 min-w-0">
             <StatusDot state={getEntryStatus(entry)} />
             <span className="font-medium truncate">
@@ -257,8 +257,8 @@ export function ApiPoolPage() {
 
   const displayEntries = localOrder
     ? localOrder
-        .map((id) => sorted.find((e) => e.id === id))
-        .filter(Boolean) as ApiEntry[]
+      .map((id) => sorted.find((e) => e.id === id))
+      .filter(Boolean) as ApiEntry[]
     : sorted;
 
   const filteredEntries = useMemo(() => {
@@ -324,14 +324,14 @@ export function ApiPoolPage() {
       </div>
 
       <Card>
-<CardHeader className="pb-3">
-            <Input
-              className="flex-1"
-              placeholder={t("apiPool.search")}
-              value={filterText}
-              onChange={(e) => setFilterText(e.target.value)}
-            />
-          </CardHeader>
+        <CardHeader className="pb-3">
+          <Input
+            className="flex-1"
+            placeholder={t("apiPool.search")}
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+          />
+        </CardHeader>
         <CardContent>
           {!entries?.length ? (
             <div className="flex h-48 items-center justify-center text-muted-foreground">
@@ -347,7 +347,7 @@ export function ApiPoolPage() {
                 items={filteredEntries.map((e) => e.id)}
                 strategy={verticalListSortingStrategy}
               >
-                <div className="grid gap-3">
+                <div className="flex flex-col gap-3">
                   {filteredEntries.map((entry) => (
                     <SortablePoolEntryCard key={entry.id} entry={entry} onTest={setTestEntry} />
                   ))}

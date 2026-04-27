@@ -101,6 +101,7 @@ pub fn run() {
             commands::channel::list_channels,
             commands::channel::create_channel,
             commands::channel::update_channel,
+            commands::channel::update_channel_response_ms,
             commands::channel::delete_channel,
             commands::channel::fetch_models,
             commands::channel::fetch_models_direct,

@@ -33,6 +33,10 @@ export async function updateChannel(params: UpdateChannelParams): Promise<Channe
   return invoke("update_channel", { params });
 }
 
+export async function updateChannelResponseMs(channelId: string, responseMs: string): Promise<void> {
+  return invoke("update_channel_response_ms", { params: { channelId, responseMs } });
+}
+
 export async function deleteChannel(id: string): Promise<void> {
   return invoke("delete_channel", { id });
 }

@@ -39,6 +39,22 @@ pub struct UpdateChannelParams {
     pub notes: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct UpdateResponseMsParams {
+    #[serde(rename = "channelId")]
+    channel_id: String,
+    #[serde(rename = "responseMs")]
+    response_ms: String,
+}
+
+#[tauri::command]
+pub fn update_channel_response_ms(
+    state: State<'_, AppState>,
+    params: UpdateResponseMsParams,
+) -> Result<(), AppError> {
+    state.db.update_channel_response_ms(&params.channel_id, &params.response_ms)
+}
+
 #[tauri::command]
 pub fn list_channels(state: State<'_, AppState>) -> Result<Vec<Channel>, AppError> {
     state.db.list_channels()

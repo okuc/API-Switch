@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
-  Edit, Plus, RefreshCw, Save, Trash2, Link2, CheckSquare, Square, Eye, EyeOff, Power, PowerOff,
+  Edit, Plus, RefreshCw, Save, Trash2, Link2, CheckSquare, Square, Eye, EyeOff, Power, PowerOff, XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import {
   fetchModelsDirect,
   selectModels,
   probeUrl,
+  updateChannelResponseMs,
 } from "@/lib/api";
 import type { ProbeResult } from "@/lib/api";
 import { API_TYPE_OPTIONS, API_TYPE_DEFAULT_URLS } from "@/types";
@@ -65,11 +66,32 @@ export function ChannelPage() {
   const [showEdit, setShowEdit] = useState(false);
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [testingChannelId, setTestingChannelId] = useState<string | null>(null);
 
   const { data: channels, isLoading } = useQuery({
     queryKey: ["channels"],
     queryFn: listChannels,
   });
+
+  const testAllChannels = useCallback(async () => {
+    if (!channels) return;
+    const toTest = channels.filter((c) => c.enabled);
+    for (const ch of toTest) {
+      setTestingChannelId(ch.id);
+      try {
+        const probe = await probeUrl(ch.base_url);
+        if (probe.reachable && probe.latency_ms > 0) {
+          const secs = probe.latency_ms >= 1000
+            ? `${(probe.latency_ms / 1000).toFixed(1)}s`
+            : `${probe.latency_ms}ms`;
+          await updateChannelResponseMs(ch.id, secs);
+        }
+      } catch {}
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    setTestingChannelId(null);
+    queryClient.invalidateQueries({ queryKey: ["channels"] });
+  }, [channels, queryClient]);
 
   const deleteMutation = useMutation({
     mutationFn: deleteChannel,
@@ -118,6 +140,20 @@ export function ChannelPage() {
                   <th className="px-4 py-3 text-left font-medium">{t("channel.type")}</th>
                   <th className="px-4 py-3 text-left font-medium">{t("channel.baseUrl")}</th>
                   <th className="px-4 py-3 text-left font-medium">{t("channel.status")}</th>
+                  <th className="px-4 py-3 text-left font-medium">
+                    <div className="flex items-center gap-1">
+                      <span>{t("channel.responseTime")}</span>
+                      <button
+                        type="button"
+                        onClick={testAllChannels}
+                        disabled={testingChannelId !== null}
+                        className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                        title={t("channel.testAllLatency")}
+                      >
+                        <RefreshCw className={cn("h-3.5 w-3.5", testingChannelId !== null && "animate-spin")} />
+                      </button>
+                    </div>
+                  </th>
                   <th className="px-4 py-3 text-left font-medium">{t("channel.modelCount")}</th>
                   <th className="px-4 py-3 text-right font-medium">{t("channel.actions")}</th>
                 </tr>
@@ -136,6 +172,7 @@ export function ChannelPage() {
                       setShowEdit(true);
                     }}
                     onDelete={() => deleteMutation.mutate(channel.id)}
+                    testingChannelId={testingChannelId}
                   />
                 ))}
               </tbody>
@@ -165,12 +202,14 @@ function ChannelRow({
   onToggleExpand,
   onEdit,
   onDelete,
+  testingChannelId,
 }: {
   channel: Channel;
   expanded: boolean;
   onToggleExpand: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  testingChannelId?: string | null;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -235,8 +274,8 @@ function ChannelRow({
 
   const filteredModels = modelSearch
     ? availableModels.filter((m) =>
-        m.name.toLowerCase().includes(modelSearch.toLowerCase()),
-      )
+      m.name.toLowerCase().includes(modelSearch.toLowerCase()),
+    )
     : availableModels;
 
   const toggleModel = (modelName: string) => {
@@ -285,6 +324,15 @@ function ChannelRow({
             {channel.enabled ? t("channel.enabled") : t("channel.disabled")}
           </span>
         </td>
+        <td className="px-4 py-3 text-xs text-muted-foreground">
+          {testingChannelId === channel.id ? (
+            <RefreshCw className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+          ) : channel.response_ms ? (
+            <span className="text-green-600">{channel.response_ms}</span>
+          ) : (
+            <span className="text-red-500" title={t("channel.latencyTestFailed")}><XCircle className="h-3.5 w-3.5" /></span>
+          )}
+        </td>
         <td className="px-4 py-3">{availableModels.length}</td>
         <td className="px-4 py-3">
           <div className="flex items-center justify-end gap-1">
@@ -309,7 +357,7 @@ function ChannelRow({
 
       {expanded && (
         <tr className="border-b bg-muted/10">
-          <td colSpan={6} className="px-4 py-4">
+          <td colSpan={7} className="px-4 py-4">
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
                 <Button
@@ -568,7 +616,15 @@ function ChannelEditorDialog({
         channelId = saved.id;
       }
 
-      // 2. Sync selected models to pool (if any)
+      // 2. Save URL probe latency as response time
+      if (urlProbe?.reachable && urlProbe.latency_ms > 0) {
+        const secs = urlProbe.latency_ms >= 1000
+          ? `${(urlProbe.latency_ms / 1000).toFixed(1)}s`
+          : `${urlProbe.latency_ms}ms`;
+        await updateChannelResponseMs(channelId, secs);
+      }
+
+      // 3. Sync selected models to pool (if any)
       if (selectedModels.length > 0) {
         await selectModels(channelId, selectedModels);
       }
